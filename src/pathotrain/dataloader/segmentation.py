@@ -17,7 +17,7 @@ tensor in ``[0, 1]`` and an ``(H, W)`` int64 tensor, or
 whatever ``transform(tile, mask)`` returns, given the ``(H, W, 3)`` uint8 tile
 and ``(H, W)`` uint8 mask.
 
-Example (TIGER-style annotations)::
+Example::
 
     kwargs = dict(
         class_map={"invasive tumor": 1, "tumor-associated stroma": 2},
