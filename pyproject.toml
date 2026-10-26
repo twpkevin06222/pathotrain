@@ -8,8 +8,17 @@ authors = [
     { name = "twpkevin06222", email = "tengwaipokevin@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = ["loguru>=0.7.3", "numpy>=1.26", "patchology", "pillow>=10.0", "torch>=2.4"]
+dependencies = ["loguru>=0.7.3", "numpy>=1.26", "patchology", "pillow>=10.0", "torch>=2.14.1"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# CUDA 13.0 builds of torch (2.14.1+cu130), not the PyPI default.
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
