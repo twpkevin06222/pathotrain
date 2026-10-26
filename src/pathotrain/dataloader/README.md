@@ -31,7 +31,7 @@ from patchology import TilingConfig
 
 kwargs = dict(
     class_map={"invasive tumor": 1, "tumor-associated stroma": 2},
-    roi_class="roi", 
+    roi_class="roi",
     object_mask_overlap=0.2,  # keep tiles with >= 20% ground truth
     tiling=TilingConfig(tile_size=512, tile_mpp=0.5),
 )
@@ -74,7 +74,7 @@ augmentation:
 
 ```python
 def augment(tile, mask):
-    out = aug(image=tile, mask=mask)  # e.g. an albumentations Compose
+    out = aug(image=tile, mask=mask)  # e.g. any (image, mask) pipeline
     return out["image"], out["mask"]
 
 
@@ -82,6 +82,35 @@ train = SegmentationDataset(dirs, transform=augment, **kwargs)
 ```
 
 With `roi_class`, use `CrossEntropyLoss(ignore_index=255)`.
+
+### Augmentation
+
+`pathotrain.dataloader.augmentation` (torchvision v2) gives a ready
+`transform` for each split. Both end in the same normalisation (ImageNet
+mean/std by default) and return `(3, H, W)` float32 and `(H, W)` int64 tensors.
+
+```python
+from pathotrain.dataloader.augmentation import eval_transform, train_transform
+
+train = SegmentationDataset(slides, annotations, transform=train_transform(n=3, m=5), **kwargs)
+val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(), **kwargs)
+```
+
+- `train_transform`: optional random crop, flips and 90 degree rotations, then
+  H&E RandAugment (`n` random operations at magnitude `m`) from
+  [pathology-he-auto-augment](https://github.com/DIAGNijmegen/pathology-he-auto-augment)
+  (Faryna et al., MIDL 2021): translate, shear, rotate, brightness, sharpness,
+  colour, contrast, equalize, identity, HSV shift and HED stain shift. The
+  operations and magnitude ranges follow the reference, which used `n=3, m=5`;
+  `m` above 15 destroys tissue structure. `n=0` keeps only flips and rotations.
+- `eval_transform`: optional centre crop and normalisation only.
+- `crop`: tile larger than you train on (e.g. `tile_size=576`) and pass
+  `crop=512` to both, for shift augmentation without border artefacts.
+- Geometric operations fill uncovered mask pixels with 255, so use
+  `CrossEntropyLoss(ignore_index=255)` with augmentation too.
+
+`HEDJitter`, `HSVJitter`, `Enhance` and `RandomRot90` are torchvision v2 transforms, so
+they also fit in your own `v2.Compose` (wrap inputs as `tv_tensors.Image` / `Mask`).
 
 ## Tests
 
