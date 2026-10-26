@@ -1,8 +1,8 @@
-"""Segmentation datasets built from directories of slides and their annotations.
+"""Segmentation datasets built from directories of slides and GeoJSON annotations.
 
-Each input directory holds ``slides/`` and ``annotations/``; a slide is paired
-with the annotation file of the same stem (ASAP ``.xml`` or ``.geojson``).
-Slides and annotations without a partner are skipped with a warning.
+A slide is paired with the GeoJSON annotation of the same stem, searched across
+all slide and annotation directories (see :func:`find_pairs`). Convert other
+formats first, e.g. ASAP XML with ``python -m patchology.utilities.xml_to_geojson``.
 
 Two ways to feed a PyTorch ``DataLoader``:
 
@@ -11,9 +11,9 @@ Two ways to feed a PyTorch ``DataLoader``:
 * Offline: :func:`export_tiles` writes tiles and masks to
   ``out_dir/<split>/{images,masks}/`` and :class:`TileFolderDataset` reads them back.
 
-Both datasets are map-style (``len``, ``ds[i]``), so they go straight into a
-``DataLoader`` with any ``num_workers``. A sample is ``(image, mask)``: a
-``(3, H, W)`` float32 image in ``[0, 1]`` and an ``(H, W)`` int64 mask, or
+Both are map-style ``torch.utils.data.Dataset`` subclasses for a ``DataLoader``
+with any ``num_workers``. A sample is ``(image, mask)``: a ``(3, H, W)`` float32
+tensor in ``[0, 1]`` and an ``(H, W)`` int64 tensor, or
 whatever ``transform(tile, mask)`` returns, given the ``(H, W, 3)`` uint8 tile
 and ``(H, W)`` uint8 mask.
 
@@ -24,81 +24,82 @@ Example (TIGER-style annotations)::
         roi_class="roi",
         tiling=TilingConfig(tile_size=512, tile_mpp=0.5),
     )
-    train = SegmentationDataset(["data/train", "data/train_02"], **kwargs)
+    slides = ["data/train/slides", "data/train_02/slides"]
+    annotations = ["data/train/geo_json_annotations", "data/train_02/geo_json_annotations"]
+    train = SegmentationDataset(slides, annotations, **kwargs)
     loader = DataLoader(train, batch_size=16, shuffle=True, num_workers=4)
 
-    export_tiles(["data/train", "data/train_02"], "tiles", "train", **kwargs)
+    export_tiles(slides, annotations, "tiles", "train", **kwargs)
     train = TileFolderDataset("tiles/train")
 """
 
 import csv
-import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Self
 
 import numpy as np
+import torch
 from loguru import logger
 from PIL import Image
+from torch.utils.data import Dataset
 
 from patchology import SegmentationTileGenerator
-from patchology.utilities.xml_to_geojson import convert
 
-ANNOTATION_SUFFIXES = (".geojson", ".json", ".xml")
+GEOJSON_SUFFIXES = (".geojson", ".json")
 
 Transform = Callable[[np.ndarray, np.ndarray], object]
 
 
-def find_pairs(
-    dirs: Sequence[str | Path],
-    geojson_dir: str | Path | None = None,
-    slides: str = "slides",
-    annotations: str = "annotations",
-) -> list[tuple[Path, Path]]:
-    """``(slide, ground truth GeoJSON)`` pairs from ``<dir>/slides`` and ``<dir>/annotations``.
+def _by_stem(dirs: Sequence[str | Path], suffixes: tuple[str, ...] | None) -> dict[str, Path]:
+    """Files in ``dirs`` keyed by stem (all files if ``suffixes`` is None)."""
+    files: dict[str, Path] = {}
+    for d in map(Path, dirs):
+        if not d.is_dir():
+            raise FileNotFoundError(f"{d} is not a directory")
+        for p in sorted(d.iterdir()):
+            if not p.is_file() or (suffixes is not None and p.suffix.lower() not in suffixes):
+                continue
+            if p.stem in files:
+                raise ValueError(f"{p.stem} is in both {files[p.stem].parent} and {d}")
+            files[p.stem] = p
+    return files
 
-    ASAP XML is converted to ``<geojson_dir>/<stem>.geojson`` (a temporary
-    directory by default), since the tile generators read GeoJSON.
+
+def find_pairs(
+    slide_dirs: Sequence[str | Path], annotation_dirs: Sequence[str | Path]
+) -> list[tuple[Path, Path]]:
+    """``(slide, GeoJSON)`` pairs matched by file stem across all of the given directories.
+
+    Annotations must already be GeoJSON (convert ASAP XML with
+    ``python -m patchology.utilities.xml_to_geojson``). Slides and annotations
+    without a partner are skipped with a warning.
 
     Raises:
-        FileNotFoundError: A directory has no ``slides`` or ``annotations`` folder.
-        ValueError: No slide in ``dirs`` has an annotation.
+        FileNotFoundError: A directory does not exist.
+        ValueError: Two slides or two annotations share a stem, or nothing matches.
     """
-    pairs = []
-    for d in map(Path, dirs):
-        slide_dir, ann_dir = d / slides, d / annotations
-        for sub in (slide_dir, ann_dir):
-            if not sub.is_dir():
-                raise FileNotFoundError(f"{sub} is not a directory")
-        found = {p.stem: p for p in sorted(slide_dir.iterdir()) if p.is_file()}
-        anns = {
-            p.stem: p for p in sorted(ann_dir.iterdir()) if p.suffix.lower() in ANNOTATION_SUFFIXES
-        }
-        for stem in sorted(found.keys() - anns.keys()):
-            logger.warning("{}: slide {} has no annotation, skipped", d, found[stem].name)
-        for stem in sorted(anns.keys() - found.keys()):
-            logger.warning("{}: annotation {} has no slide, skipped", d, anns[stem].name)
-        for stem in sorted(found.keys() & anns.keys()):
-            ann = anns[stem]
-            if ann.suffix.lower() == ".xml":
-                if geojson_dir is None:
-                    geojson_dir = tempfile.mkdtemp(prefix="pathotrain-geojson-")
-                ann = convert(ann, geojson_dir)
-            pairs.append((found[stem], ann))
+    slides = _by_stem(slide_dirs, None)
+    annotations = _by_stem(annotation_dirs, GEOJSON_SUFFIXES)
+    for stem in sorted(slides.keys() - annotations.keys()):
+        logger.warning("slide {} has no annotation, skipped", slides[stem])
+    for stem in sorted(annotations.keys() - slides.keys()):
+        logger.warning("annotation {} has no slide, skipped", annotations[stem])
+    pairs = [(slides[s], annotations[s]) for s in sorted(slides.keys() & annotations.keys())]
     if not pairs:
-        raise ValueError(f"no slide with a matching annotation in {list(dirs)}")
+        raise ValueError(f"no slide in {list(slide_dirs)} matches an annotation")
     return pairs
 
 
 def _sample(tile: np.ndarray, mask: np.ndarray, transform: Transform | None) -> object:
     if transform is not None:
         return transform(tile, mask)
-    image = np.ascontiguousarray(tile.transpose(2, 0, 1), dtype=np.float32) / 255
-    return image, mask.astype(np.int64)
+    image = torch.from_numpy(np.ascontiguousarray(tile.transpose(2, 0, 1))).float() / 255
+    return image, torch.from_numpy(mask.astype(np.int64))
 
 
-class SegmentationDataset:
-    """Lazy ``(image, mask)`` tiles of every annotated slide in ``dirs``.
+class SegmentationDataset(Dataset):
+    """Lazy ``(image, mask)`` tiles of every slide in ``slide_dirs`` with a GeoJSON annotation.
 
     Each slide is tiled once in ``__init__`` (tissue, ROI and ground-truth
     overlap selection); tiles and masks are read from the slide per item.
@@ -110,15 +111,15 @@ class SegmentationDataset:
     # slides, open them per item instead (fd limits).
     def __init__(
         self,
-        dirs: Sequence[str | Path],
+        slide_dirs: Sequence[str | Path],
+        annotation_dirs: Sequence[str | Path],
         transform: Transform | None = None,
-        geojson_dir: str | Path | None = None,
         **generator_kwargs,
     ) -> None:
         self.transform = transform
         self.generators = []
         try:
-            for slide, ground_truth in find_pairs(dirs, geojson_dir):
+            for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):
                 self.generators.append(
                     SegmentationTileGenerator(slide, ground_truth, **generator_kwargs)
                 )
@@ -157,7 +158,8 @@ class SegmentationDataset:
 
 
 def export_tiles(
-    dirs: Sequence[str | Path],
+    slide_dirs: Sequence[str | Path],
+    annotation_dirs: Sequence[str | Path],
     out_dir: str | Path,
     split: str,
     fmt: str = "png",
@@ -166,7 +168,7 @@ def export_tiles(
     """Write every annotated slide's tiles and masks under ``out_dir/split`` and return it.
 
     Layout: ``images/<slide>_<x>_<y>.<fmt>``, ``masks/<slide>_<x>_<y>.png`` (always
-    lossless), ``geojson/`` (converted XML) and ``tiles.csv`` (image, mask, slide,
+    lossless) and ``tiles.csv`` (image, mask, slide,
     x, y; level-0 coordinates). Keyword arguments are as for :class:`SegmentationDataset`.
     """
     root = Path(out_dir) / split
@@ -174,7 +176,7 @@ def export_tiles(
     images.mkdir(parents=True, exist_ok=True)
     masks.mkdir(parents=True, exist_ok=True)
     rows = []
-    for slide, ground_truth in find_pairs(dirs, root / "geojson"):
+    for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):
         with SegmentationTileGenerator(slide, ground_truth, **generator_kwargs) as gen:
             for (x, y), tile, mask in gen:
                 name = f"{slide.stem}_{x}_{y}"
@@ -189,7 +191,7 @@ def export_tiles(
     return root
 
 
-class TileFolderDataset:
+class TileFolderDataset(Dataset):
     """``(image, mask)`` pairs written by :func:`export_tiles`, read from ``root/tiles.csv``."""
 
     def __init__(self, root: str | Path, transform: Transform | None = None) -> None:

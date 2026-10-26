@@ -1,44 +1,38 @@
-import json
-
 import numpy as np
 import pytest
+from torch.utils.data import Dataset
 
-from pathotrain.dataloader import SegmentationDataset, find_pairs
-
-ASAP = """<?xml version="1.0" ?><ASAP_Annotations><Annotations>
-<Annotation Name="a" Type="Polygon" PartOfGroup="tumor"><Coordinates>
-<Coordinate Order="0" X="0" Y="0"/><Coordinate Order="1" X="10" Y="0"/>
-<Coordinate Order="2" X="10" Y="10"/></Coordinates></Annotation>
-</Annotations></ASAP_Annotations>"""
+from pathotrain.dataloader import SegmentationDataset, TileFolderDataset, find_pairs
 
 
-def make_dir(root, slides, annotations):
-    (root / "slides").mkdir(parents=True)
-    (root / "annotations").mkdir()
-    for name in slides:
-        (root / "slides" / name).touch()
-    for name in annotations:
-        (root / "annotations" / name).write_text(ASAP)
-    return root
+def touch(d, *names):
+    d.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (d / name).touch()
+    return d
 
 
-def test_find_pairs_matches_by_stem_and_converts_xml(tmp_path):
-    a = make_dir(tmp_path / "a", ["s1.tif", "s2.tif"], ["s1.xml", "s3.xml"])
-    b = make_dir(tmp_path / "b", ["s4.svs"], ["s4.xml"])
-    pairs = find_pairs([a, b], tmp_path / "geojson")
+def test_find_pairs_matches_by_stem_across_dirs(tmp_path):
+    s1 = touch(tmp_path / "a/slides", "s1.tif", "s2.tif")
+    s2 = touch(tmp_path / "b/slides", "s4.svs")
+    # s4's annotation sits in the other annotation dir; XML is not an annotation.
+    a1 = touch(tmp_path / "a/geojson", "s1.geojson", "s3.geojson", "s4.geojson", "s2.xml")
+    a2 = touch(tmp_path / "b/geojson")
+    pairs = find_pairs([s1, s2], [a1, a2])
     assert [(s.name, g.name) for s, g in pairs] == [
         ("s1.tif", "s1.geojson"),
         ("s4.svs", "s4.geojson"),
     ]
-    feature = json.loads(pairs[0][1].read_text())["features"][0]
-    assert feature["properties"]["classification"]["name"] == "tumor"
 
 
 def test_find_pairs_errors(tmp_path):
     with pytest.raises(FileNotFoundError):
-        find_pairs([tmp_path])
-    with pytest.raises(ValueError):
-        find_pairs([make_dir(tmp_path / "a", ["s1.tif"], ["s2.xml"])])
+        find_pairs([tmp_path / "missing"], [tmp_path])
+    slides = touch(tmp_path / "slides", "s1.tif")
+    with pytest.raises(ValueError, match="matches"):
+        find_pairs([slides], [touch(tmp_path / "ann", "s2.geojson")])
+    with pytest.raises(ValueError, match="both"):
+        find_pairs([slides, touch(tmp_path / "more", "s1.svs")], [tmp_path / "ann"])
 
 
 def test_locate_spans_slides():
@@ -56,3 +50,8 @@ def test_locate_spans_slides():
     assert ds.locate(-1) == ("g2", 2)
     with pytest.raises(IndexError):
         ds.locate(5)
+
+
+def test_datasets_are_torch_datasets():
+    assert issubclass(SegmentationDataset, Dataset)
+    assert issubclass(TileFolderDataset, Dataset)

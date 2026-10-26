@@ -8,7 +8,7 @@ authors = [
     { name = "twpkevin06222", email = "tengwaipokevin@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = ["loguru>=0.7.3", "numpy>=1.26", "patchology", "pillow>=10.0"]
+dependencies = ["loguru>=0.7.3", "numpy>=1.26", "patchology", "pillow>=10.0", "torch>=2.4"]
 
 [build-system]
 requires = ["hatchling"]
