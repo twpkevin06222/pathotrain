@@ -103,6 +103,9 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
   colour, contrast, equalize, identity, HSV shift and HED stain shift. The
   operations and magnitude ranges follow the reference, which used `n=3, m=5`;
   `m` above 15 destroys tissue structure. `n=0` keeps only flips and rotations.
+- Scanner artifacts (off by default): `blur`, `noise` and `jpeg` are the
+  probabilities of slight defocus blur, sensor noise and JPEG compression, e.g.
+  `train_transform(blur=0.2, noise=0.2, jpeg=0.2)`. They change the tile only.
 - `eval_transform`: optional centre crop and normalisation only.
 - `crop`: tile larger than you train on (e.g. `tile_size=576`) and pass
   `crop=512` to both, for shift augmentation without border artefacts.

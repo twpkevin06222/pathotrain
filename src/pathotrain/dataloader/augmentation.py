@@ -22,11 +22,13 @@ stay intact) and colour operations leave it alone. Uncovered mask pixels are
 Randomness comes from torch's generator, which a ``DataLoader`` seeds per worker.
 """
 
+import io
 from collections.abc import Sequence
 from typing import Any, Literal
 
 import numpy as np
 import torch
+from PIL import Image
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
@@ -34,6 +36,11 @@ from torchvision.transforms.v2 import functional as F
 # preprocessing normalization is based on imagenet and subject to change
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# Scanner artifacts for the optional train_transform extras (blur, noise, jpeg).
+BLUR_SIGMA = (0.1, 1.5)  # pixels; slight defocus
+NOISE_SIGMA = 0.03  # in [0, 1] units, about 8 grey levels
+JPEG_QUALITY = (50, 95)  # WSI tiles are often JPEG compressed
 
 # Ruifrok-Johnston H&E-DAB stain vectors, as in the reference implementation.
 RGB_FROM_HED = torch.tensor([[0.65, 0.70, 0.29], [0.07, 0.99, 0.11], [0.27, 0.57, 0.78]])
@@ -166,6 +173,28 @@ class Enhance(_ImageOnly):
         return ENHANCE[self.op](inpt, params["factor"])
 
 
+class RandomJPEG(_ImageOnly):
+    """JPEG round trip at a quality drawn from ``quality`` (inclusive), via PIL.
+
+    Replaces ``v2.JPEG``, whose torchvision encoder is deprecated since 0.29.
+    """
+
+    def __init__(self, quality: tuple[int, int] = JPEG_QUALITY) -> None:
+        super().__init__()
+        self.quality = quality
+
+    def make_params(self, flat_inputs: list[Any]) -> dict[str, Any]:
+        return {"quality": int(torch.randint(self.quality[0], self.quality[1] + 1, ()))}
+
+    def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+        buffer = io.BytesIO()
+        Image.fromarray(inpt.permute(1, 2, 0).numpy()).save(
+            buffer, "JPEG", quality=params["quality"]
+        )
+        decoded = torch.from_numpy(np.array(Image.open(buffer))).permute(2, 0, 1)
+        return tv_tensors.wrap(decoded, like=inpt)
+
+
 class RandomRot90(v2.Transform):
     """Rotate image and mask together by a random multiple of 90 degrees."""
 
@@ -273,8 +302,12 @@ def train_transform(
     std: Sequence[float] = IMAGENET_STD,
     fill: int = 128,
     mask_fill: int = 255,
+    blur: float = 0.0,
+    noise: float = 0.0,
+    jpeg: float = 0.0,
 ) -> SegmentationTransform:
-    """Random crop (if ``crop``), flips and 90 degree rotations, H&E RandAugment, normalisation.
+    """Random crop (if ``crop``), flips and 90 degree rotations, H&E RandAugment,
+    optional scanner artifacts, normalisation.
 
     Args:
         n, m: H&E RandAugment operations per tile and magnitude, see
@@ -283,11 +316,25 @@ def train_transform(
             augmentation, and pass the same ``crop`` to :func:`eval_transform`.
         mean, std: Normalisation, in ``[0, 1]`` units (ImageNet by default).
         fill, mask_fill: Tile and mask value for pixels uncovered by geometric ops.
+        blur, noise, jpeg: Probability of Gaussian blur (sigma in :data:`BLUR_SIGMA`),
+            Gaussian noise (:data:`NOISE_SIGMA`) and JPEG compression (quality in
+            :data:`JPEG_QUALITY`), applied in that order, as a scanner would; 0 (the
+            default) turns each off. They change the tile only, never the mask.
     """
     transforms = [v2.RandomCrop(crop)] if crop else []
     transforms += [v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), RandomRot90()]
     if n:
         transforms.append(he_randaugment(n, m, fill, mask_fill))
+    extras = [
+        (blur, v2.GaussianBlur(kernel_size=9, sigma=BLUR_SIGMA)),  # 9 px covers 3 sigma
+        (noise, v2.GaussianNoise(sigma=NOISE_SIGMA)),
+        (jpeg, RandomJPEG(JPEG_QUALITY)),
+    ]
+    for p, t in extras:
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"blur, noise and jpeg are probabilities in [0, 1], got {p}")
+        if p:
+            transforms.append(v2.RandomApply([t], p=p))
     return SegmentationTransform(transforms, mean, std)
 
 

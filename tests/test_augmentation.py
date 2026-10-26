@@ -1,7 +1,9 @@
+import io
 import pickle
 
 import cv2
 import numpy as np
+import pytest
 import torch
 from PIL import Image, ImageEnhance
 from torchvision import tv_tensors
@@ -10,6 +12,7 @@ from pathotrain.dataloader.augmentation import (
     ENHANCE,
     HEDJitter,
     HSVJitter,
+    RandomJPEG,
     eval_transform,
     hed_jitter,
     hed_to_rgb,
@@ -90,3 +93,29 @@ def test_eval_transform_is_deterministic():
     (a, ma), (b, mb) = t(TILE, MASK), t(TILE, MASK)
     assert torch.equal(a, b) and torch.equal(ma, mb)
     assert torch.equal(ma, torch.from_numpy(MASK[8:56, 8:56]).long())
+
+
+def test_scanner_extras_change_tile_not_mask():
+    # Extras run after the flips, so the same seed gives the same geometry.
+    torch.manual_seed(0)
+    plain, plain_mask = train_transform(n=0)(TILE, MASK)
+    torch.manual_seed(0)
+    noisy, noisy_mask = train_transform(n=0, blur=1.0, noise=1.0, jpeg=1.0)(TILE, MASK)
+    assert torch.equal(plain_mask, noisy_mask)
+    assert not torch.equal(plain, noisy)
+
+
+def test_scanner_extras_off_by_default():
+    assert "RandomApply" not in repr(train_transform().compose)
+
+
+def test_scanner_extras_reject_bad_probability():
+    with pytest.raises(ValueError, match="probabilities"):
+        train_transform(jpeg=1.5)
+
+
+def test_jpeg_matches_pil():
+    buffer = io.BytesIO()
+    Image.fromarray(TILE).save(buffer, "JPEG", quality=60)
+    ref = np.array(Image.open(buffer))
+    assert np.array_equal(as_hwc(RandomJPEG((60, 60))(IMAGE)), ref)
