@@ -1,0 +1,15 @@
+[project]
+name = "pathotrain"
+version = "0.1.0"
+description = "Training on whole slide images, built on patchology."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "twpkevin06222", email = "tengwaipokevin@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = ["loguru>=0.7.3", "numpy>=1.26", "patchology", "pillow>=10.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

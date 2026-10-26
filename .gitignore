@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.claude
+
+# Not part of the first stage yet.
+src/pathotrain/detection/
+src/pathotrain/histossl/
+src/pathotrain/pathofm/
+src/pathotrain/pathogen/
+src/pathotrain/registration/
