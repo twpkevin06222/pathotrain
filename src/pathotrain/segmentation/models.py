@@ -5,12 +5,16 @@ Every builder returns a plain ``nn.Module`` mapping ``(B, C, H, W)`` images to
 
     build_model("smp:unet", num_classes=6, encoder_name="resnet34", encoder_weights="imagenet")
     build_model("nnunet:resenc", num_classes=6)
+    build_model("smp:unet", num_classes=6, encoder_name="midnight-12k")  # foundation model
 """
 
 import segmentation_models_pytorch as smp
 from dynamic_network_architectures.architectures.unet import PlainConvUNet, ResidualEncoderUNet
 from dynamic_network_architectures.initialization.weight_init import InitWeights_He
 from torch import nn
+
+from pathotrain.pathofm import FOUNDATION_MODELS
+from pathotrain.segmentation.encoders import build_fm_model
 
 
 def build_model(name: str, num_classes: int, in_channels: int = 3, **kwargs) -> nn.Module:
@@ -23,9 +27,17 @@ def build_model(name: str, num_classes: int, in_channels: int = 3, **kwargs) -> 
         num_classes: Output channels, including background.
         in_channels: Image channels.
         **kwargs: Passed to ``smp.create_model`` (e.g. ``encoder_name``,
-            ``encoder_weights``) or to :func:`nnunet`.
+            ``encoder_weights``) or to :func:`nnunet`. ``encoder_name`` can be a
+            foundation model from ``pathotrain.pathofm`` (``"midnight-12k"``,
+            ``"spectra-midnight-12k"``) or a ViT module; it is wrapped in a
+            :class:`ViTPyramidEncoder`, configured by ``encoder_kwargs``
+            (``layers``, ``channels``, ``freeze``).
     """
     library, _, arch = name.partition(":")
+    encoder = kwargs.get("encoder_name")
+    if library == "smp" and (encoder in FOUNDATION_MODELS or isinstance(encoder, nn.Module)):
+        kwargs.pop("encoder_weights", None)  # the foundation model loads its own weights
+        return build_fm_model(arch, kwargs.pop("encoder_name"), num_classes, in_channels, **kwargs)
     if library == "smp":
         return smp.create_model(arch, in_channels=in_channels, classes=num_classes, **kwargs)
     if library == "nnunet":

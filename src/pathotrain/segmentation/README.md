@@ -56,6 +56,70 @@ arguments go to the library's own builder.
   tile side must be divisible by `2 ** (n_stages - 1)`, which is 64 by default.
   Deep supervision is off.
 
+## Pathology foundation-model encoders
+
+Two open foundation models from `pathotrain.pathofm` can serve as the encoder
+of any SMP decoder except DPT (SMP restricts DPT to timm encoders). Both are
+MIT licensed and not gated, so no Hugging Face login is needed.
+
+| `encoder_name` | Weights | Notes |
+|---|---|---|
+| `midnight-12k` | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | DINOv2 ViT-g/14, 1.1B parameters, 1536-dim tokens |
+| `spectra-midnight-12k` | [medarc/Midnight-12k-SPECTRA](https://huggingface.co/medarc/Midnight-12k-SPECTRA) | the same network, tuned for robustness to scanner, stain and centre |
+
+```python
+from pathotrain.dataloader.augmentation import eval_transform, train_transform
+from pathotrain.pathofm import MIDNIGHT_MEAN, MIDNIGHT_STD
+from pathotrain.segmentation import build_model
+
+model = build_model("smp:unet", num_classes=6, encoder_name="midnight-12k")
+model = build_model(
+    "smp:upernet",
+    num_classes=6,
+    encoder_name="spectra-midnight-12k",
+    encoder_kwargs={"freeze": False, "layers": (10, 20, 30, 40)},
+)
+
+# Midnight normalises with mean = std = 0.5, not ImageNet statistics.
+train_tf = train_transform(mean=MIDNIGHT_MEAN, std=MIDNIGHT_STD)
+val_tf = eval_transform(mean=MIDNIGHT_MEAN, std=MIDNIGHT_STD)
+```
+
+**Classification vs segmentation embedding.** The model card defines two different outputs:
+
+- **Classification embedding** (`pathofm.classification_embedding`): the CLS
+  token concatenated with the mean patch token, `(B, 3072)`. It is one vector
+  per tile, with no spatial information.
+- **Segmentation embedding** (`pathofm.segmentation_embedding`): the
+  last-layer patch tokens after the final LayerNorm, reshaped to
+  `(B, 1536, H/14, W/14)` (16 × 16 for a 224 px tile).
+
+The encoder (`ViTPyramidEncoder`) builds on the segmentation embedding. SMP
+decoders need features at strides 4, 8, 16 and 32, so it takes the patch
+tokens of four layers (by default 10, 20, 30 and 40 of 40), applies the final
+LayerNorm to each, and resamples them DPT-style:
+
+- the layer-10 tokens are upsampled to stride 4;
+- the layer-20 tokens are upsampled to stride 8;
+- the layer-30 tokens stay at stride 16;
+- the layer-40 tokens are downsampled to stride 32.
+
+The layer-40 feature is exactly the card's segmentation embedding. Use
+`layers=(40, 40, 40, 40)` to build every scale from it alone.
+
+Notes:
+- **Tile size:** the tile is resized so that the token grid is H/16 × W/16
+  (512 px is fed as 448 px), which lines the grid up with stride 16. The tile
+  side must be divisible by 32.
+- **`freeze=True` (default):** the backbone is fixed and runs without
+  gradients, so only the resampling and the decoder train. Checkpoints still
+  include the full backbone (about 4.5 GB in fp32).
+- **`freeze=False`:** fine-tunes all 1.1B parameters. Enable
+  `model.encoder.backbone.gradient_checkpointing_enable()` and expect several
+  times the memory.
+- **Other ViTs:** `encoder_name` also accepts a loaded ViT module with the
+  transformers interface (e.g. any `Dinov2Model`).
+
 ## Training
 
 `pathotrain.engine` is a training loop on [Lightning Fabric](https://lightning.ai/docs/fabric/)
