@@ -14,3 +14,10 @@ src/pathotrain/histossl/
 src/pathotrain/pathofm/
 src/pathotrain/pathogen/
 src/pathotrain/registration/
+
+# Local session notes.
+HANDOFF.md
+
+# MLflow local tracking.
+mlruns/
+mlflow.db
