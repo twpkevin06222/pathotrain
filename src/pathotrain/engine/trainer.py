@@ -105,7 +105,9 @@ class Trainer:
         if val_loader is not None:
             val_loader = fabric.setup_dataloaders(val_loader)
         steps_per_epoch = -(-len(train_loader) // c.accumulate)
-        optimizer, self.scheduler = task.configure_optimizers(steps_per_epoch * c.max_epochs)
+        optimizer, self.scheduler = task.configure_optimizers(
+            steps_per_epoch * c.max_epochs, steps_per_epoch
+        )
         task.model, self.optimizer = fabric.setup(task.model, optimizer)
         self.task = task
         if ckpt_path is not None:

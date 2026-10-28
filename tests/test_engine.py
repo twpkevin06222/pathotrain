@@ -1,4 +1,5 @@
 import csv
+import itertools
 from types import SimpleNamespace
 
 import mlflow
@@ -14,6 +15,9 @@ from pathotrain.engine import (
     ModelCheckpoint,
     Trainer,
     TrainerConfig,
+    dump_config,
+    flatten,
+    load_config,
     sweep,
 )
 from pathotrain.segmentation import SegmentationTask, build_model
@@ -178,3 +182,41 @@ def test_sweep_checkpoints_each_trial_when_asked(tmp_path, tracking):
         "trial-0",
         "trial-1",
     ]
+
+
+def test_config_round_trips_flattens_and_guards_existing_runs(tmp_path):
+    cfg = {"name": "exp", "loss": {"name": "FocalLoss", "gamma": 2.0}, "classes": {"a b": 1}}
+    path = dump_config(cfg, tmp_path / "run")
+    assert load_config(path) == cfg
+    assert dump_config(cfg, tmp_path / "run") == path  # same config again, e.g. resume
+    with pytest.raises(FileExistsError):
+        dump_config({**cfg, "name": "other"}, tmp_path / "run")
+    assert flatten(cfg) == {
+        "name": "exp",
+        "loss.name": "FocalLoss",
+        "loss.gamma": 2.0,
+        "classes.a b": 1,
+    }
+
+
+@pytest.mark.parametrize("warmup_epochs", [0, 0.5, 2])
+def test_warmup_ramps_to_lr_then_cosine_decays(warmup_epochs):
+    task = SegmentationTask(torch.nn.Conv2d(3, 2, 1), 2, lr=1.0, warmup_epochs=warmup_epochs)
+    optimizer, scheduler = task.configure_optimizers(total_steps=20, steps_per_epoch=2)
+    lrs = []
+    for _ in range(20):
+        lrs.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        scheduler.step()
+    warmup = round(warmup_epochs * 2)
+    expected_warmup = [(i + 1) / warmup for i in range(warmup)]
+    assert lrs[:warmup] == pytest.approx(expected_warmup)
+    decay = lrs[warmup:]
+    assert decay[0] == pytest.approx(1.0) and all(a > b for a, b in itertools.pairwise(decay))
+    assert lrs[-1] < 0.05
+
+
+def test_warmup_must_leave_steps_to_decay():
+    task = SegmentationTask(torch.nn.Conv2d(3, 2, 1), 2, warmup_epochs=10)
+    with pytest.raises(ValueError, match="warmup"):
+        task.configure_optimizers(total_steps=20, steps_per_epoch=2)
