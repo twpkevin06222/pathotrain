@@ -27,7 +27,10 @@ class Task(nn.Module):
         """Return the metrics accumulated since the last call, then reset them."""
         raise NotImplementedError
 
-    def configure_optimizers(self, total_steps: int) -> tuple[Optimizer, LRScheduler | None]:
+    def configure_optimizers(
+        self, total_steps: int, steps_per_epoch: int
+    ) -> tuple[Optimizer, LRScheduler | None]:
         """Optimizer for ``self.model`` and an optional scheduler stepped once per
-        optimizer step (``total_steps`` of them in the whole run)."""
+        optimizer step (``total_steps`` of them in the whole run, ``steps_per_epoch``
+        per epoch)."""
         raise NotImplementedError

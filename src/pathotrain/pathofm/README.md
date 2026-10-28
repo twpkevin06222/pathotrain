@@ -235,7 +235,7 @@ model in a `Task` with these four methods:
 - `training_step(batch)`;
 - `validation_step(batch)`;
 - `compute_metrics()`;
-- `configure_optimizers(total_steps)`.
+- `configure_optimizers(total_steps, steps_per_epoch)`.
 
 `SegmentationTask` in `pathotrain.segmentation` is a complete example of the
 contract.

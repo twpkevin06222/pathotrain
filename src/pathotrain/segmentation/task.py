@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
-from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, LRScheduler, SequentialLR
 from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassJaccardIndex
 
@@ -23,6 +23,8 @@ class SegmentationTask(Task):
         num_classes: Classes including background.
         loss: Defaults to :class:`CEDiceLoss` with ``ignore_index``.
         lr: AdamW learning rate, decayed to 0 with a cosine schedule.
+        warmup_epochs: Linear warmup to ``lr`` before the cosine decay; may be
+            fractional (``0.5`` is half an epoch). ``0`` disables it.
         weight_decay: AdamW weight decay.
         ignore_index: Mask value excluded from loss and metrics.
         class_names: Names for the IoU keys, default the class indices.
@@ -37,6 +39,7 @@ class SegmentationTask(Task):
         weight_decay: float = 1e-4,
         ignore_index: int = 255,
         class_names: list[str] | None = None,
+        warmup_epochs: float = 0,
     ) -> None:
         super().__init__()
         self.model = model
@@ -44,6 +47,9 @@ class SegmentationTask(Task):
         self.ignore_index = ignore_index
         self.lr = lr
         self.weight_decay = weight_decay
+        if warmup_epochs < 0:
+            raise ValueError(f"warmup_epochs must be >= 0, got {warmup_epochs}")
+        self.warmup_epochs = warmup_epochs
         self.class_names = class_names or [str(i) for i in range(num_classes)]
         if len(self.class_names) != num_classes:
             raise ValueError(f"{len(self.class_names)} class names for {num_classes} classes")
@@ -73,6 +79,16 @@ class SegmentationTask(Task):
         self.val_loss.reset()
         return metrics
 
-    def configure_optimizers(self, total_steps: int) -> tuple[Optimizer, LRScheduler]:
+    def configure_optimizers(
+        self, total_steps: int, steps_per_epoch: int
+    ) -> tuple[Optimizer, LRScheduler]:
         optimizer = AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        return optimizer, CosineAnnealingLR(optimizer, T_max=total_steps)
+        warmup = round(self.warmup_epochs * steps_per_epoch)
+        if warmup >= total_steps:
+            raise ValueError(f"{warmup} warmup steps leave none of the {total_steps} to decay")
+        cosine = CosineAnnealingLR(optimizer, T_max=total_steps - warmup)
+        if warmup == 0:
+            return optimizer, cosine
+        # The first step runs at lr / warmup, step `warmup` at the full lr.
+        linear = LinearLR(optimizer, start_factor=1 / warmup, total_iters=warmup - 1)
+        return optimizer, SequentialLR(optimizer, [linear, cosine], milestones=[warmup])
