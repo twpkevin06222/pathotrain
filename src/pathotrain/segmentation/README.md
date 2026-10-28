@@ -163,16 +163,56 @@ metrics = trainer.fit(
 - MLflow writes to `MLFLOW_TRACKING_URI`, e.g. `sqlite:///mlflow.db`. Browse it with
   `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
 
+### From a config file
+
+The same setup without writing a script: one YAML file per experiment. Copy
+[`config.example.yaml`](config.example.yaml), which lists every section with its defaults.
+
+```bash
+python -m pathotrain.segmentation.train config.yaml
+python -m pathotrain.segmentation.train config.yaml --resume runs/exp01/checkpoints/last.ckpt
+```
+
+```yaml
+name: exp01                 # MLflow experiment
+seed: 0
+output_dir: runs/exp01      # config.yaml, checkpoints/, logs/
+mean: IMAGENET_MEAN         # or MIDNIGHT_MEAN, or 3 numbers in [0, 1]
+std: IMAGENET_STD
+model: {name: "smp:unet", num_classes: 6, encoder_name: resnet34, encoder_weights: imagenet}
+loss: {name: FocalDiceLoss, gamma: 2.0}        # optional, default CEDiceLoss
+task: {lr: 1.0e-3, warmup_epochs: 1}           # SegmentationTask
+trainer: {max_epochs: 50, precision: bf16-mixed}
+early_stopping: {patience: 10}                 # optional
+augmentation: {blur: 0.2, jpeg: 0.2}           # optional, train_transform
+loader: {batch_size: 16, num_workers: 8}
+data:
+  class_map: {tumor: 1, stroma: 2}             # the rest goes to SegmentationTileGenerator
+  roi_class: roi
+  train: {slides: [data/train/slides], annotations: [data/train/geojson], tiling: {tile_size: 512, tile_mpp: 0.5}}
+  val: {slides: [data/val/slides], annotations: [data/val/geojson], tiling: {tile_size: 512, tile_mpp: 0.5}}
+```
+
+- The config is copied to `output_dir/config.yaml`, uploaded to the MLflow run,
+  logged as flat params (`loss.gamma`, ...) and stored in both checkpoints. A
+  different config for an existing `output_dir` is refused unless `--resume`.
+- On resume, `max_epochs` may grow: the learning-rate schedule is rebuilt for
+  the new length.
+- `load_model("runs/exp01/checkpoints/best.ckpt")` returns the model and its config.
+- With the `fastslide` backend, add `multiprocessing_context: forkserver` to `loader`.
+
 ### Checkpoints
 
-`ModelCheckpoint(dirpath, monitor="val/miou", mode="max", log_artifact=False)` writes:
+`ModelCheckpoint(dirpath, monitor="val/miou", mode="max", log_artifact=False, config=None)` writes:
 
 | File | When | Contents |
 |---|---|---|
-| `best.ckpt` | `monitor` beats the best so far (strictly; NaN never counts) | weights only: `model`, `epoch`, `step`, `monitor`, `value` |
-| `last.ckpt` | after every epoch | `model`, `optimizer`, `scheduler`, `epoch`, `step` and callback state, for resuming |
+| `best.ckpt` | `monitor` beats the best so far (strictly; NaN never counts) | weights only: `model`, `epoch`, `step`, `monitor`, `value` (+ `config`) |
+| `last.ckpt` | after every epoch | `model`, `optimizer`, `epoch`, `step` and callback state, for resuming (+ `config`) |
 
-- Resume with `trainer.fit(..., ckpt_path="checkpoints/last.ckpt")`. The best
+- Resume with `trainer.fit(..., ckpt_path="checkpoints/last.ckpt")`. The
+  scheduler is rebuilt for this run and replayed to the saved step, so a longer
+  `max_epochs` works; schedulers must depend on the step count only. The best
   value and epoch, and `EarlyStopping`'s patience counter, are restored, so the
   first resumed epoch only replaces `best.ckpt` if it really is better.
 - At the end of training, `best/<monitor>`, `best/epoch` and the

@@ -21,7 +21,9 @@ class ModelCheckpoint:
     ``last.ckpt``, so a resumed run keeps comparing against the true best. At
     the end of training the best value, epoch and path are logged to every
     logger; with ``log_artifact=True`` ``best.ckpt`` is also uploaded to loggers
-    that store files (:class:`MLflowLogger`).
+    that store files (:class:`MLflowLogger`). A ``config`` (e.g. the experiment's
+    YAML as a dict) is stored in both files under ``"config"``, so a checkpoint
+    says how to rebuild its model.
     """
 
     def __init__(
@@ -30,8 +32,10 @@ class ModelCheckpoint:
         monitor: str = "val/miou",
         mode: str = "max",
         log_artifact: bool = False,
+        config: dict | None = None,
     ) -> None:
         self.dirpath = Path(dirpath)
+        self.extra = {} if config is None else {"config": config}
         self.monitor = monitor
         self.mode = mode
         self.log_artifact = log_artifact
@@ -45,11 +49,17 @@ class ModelCheckpoint:
     def on_validation_end(self, trainer, metrics: dict[str, float]) -> None:
         if _improved(metrics[self.monitor], self.best, self.mode):
             self.best, self.best_epoch = metrics[self.monitor], trainer.epoch
-            trainer.save(self.best_path, weights_only=True, monitor=self.monitor, value=self.best)
+            trainer.save(
+                self.best_path,
+                weights_only=True,
+                monitor=self.monitor,
+                value=self.best,
+                **self.extra,
+            )
 
     def on_epoch_end(self, trainer) -> None:
         # After every on_validation_end, so other callbacks' state is current too.
-        trainer.save(self.dirpath / "last.ckpt")
+        trainer.save(self.dirpath / "last.ckpt", **self.extra)
 
     def on_fit_end(self, trainer) -> None:
         if self.best is None:
