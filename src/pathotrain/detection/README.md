@@ -41,7 +41,11 @@ trainer = Trainer(
 )
 trainer.fit(
     task,
-    DataLoader(train, batch_size=8, shuffle=True, num_workers=8, collate_fn=collate),
+    # persistent_workers: no worker restart per epoch (train only, so the val
+    # workers are not held in RAM for the whole run)
+    DataLoader(
+        train, batch_size=8, shuffle=True, num_workers=8, persistent_workers=True, collate_fn=collate
+    ),
     DataLoader(val, batch_size=8, num_workers=8, collate_fn=collate),
 )
 ```
