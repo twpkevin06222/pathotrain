@@ -94,3 +94,7 @@ data:
     slides: [data/val/slides]
     annotations: [data/val/annotations]
     tiling: {tile_size: 256, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
+  # Or tiles already on disk, per split (the options above then do not apply):
+  #   train: {root: tiles/train}                         # written by export_tiles
+  #   train: {images: tumor/images, masks: tumor/masks}    # paired by file stem
+  # Tiles of different sizes need augmentation.crop to be batched.

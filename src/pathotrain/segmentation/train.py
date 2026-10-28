@@ -26,8 +26,10 @@ Sections (``?`` marks optional ones)::
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
-      ...                       # the rest goes to SegmentationTileGenerator for both
-                                # splits (class_map, roi_class, backend, ...)
+                                # or tiles on disk, per split (TileFolderDataset):
+                                # {root: dir} from export_tiles, or {images: dir, masks: dir}
+      ...                       # the rest goes to SegmentationTileGenerator for the
+                                # slide splits (class_map, roi_class, backend, ...)
 """
 
 import argparse
@@ -36,11 +38,11 @@ from pathlib import Path
 import torch
 from lightning_fabric import seed_everything
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from patchology import TilingConfig
 from pathotrain import segmentation
-from pathotrain.dataloader import SegmentationDataset
+from pathotrain.dataloader import SegmentationDataset, TileFolderDataset
 from pathotrain.dataloader.augmentation import (
     IMAGENET_MEAN,
     IMAGENET_STD,
@@ -106,9 +108,13 @@ def build_loss(cfg: dict) -> nn.Module | None:
     return getattr(segmentation, name)(**kwargs)
 
 
-def build_dataset(cfg: dict, split: str, transform) -> SegmentationDataset:
-    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
+def build_dataset(cfg: dict, split: str, transform) -> Dataset:
+    """``data[split]`` as a dataset: slides with annotations, tiled on the fly, or
+    tiles on disk (``root`` from ``export_tiles``, or ``images`` and ``masks``)."""
     s = cfg["data"][split]
+    if "slides" not in s:
+        return TileFolderDataset(transform=transform, **s)
+    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
     return SegmentationDataset(
         s["slides"],
         s["annotations"],
