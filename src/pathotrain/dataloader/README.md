@@ -68,6 +68,17 @@ train = TileFolderDataset("tiles/train")
 Layout: `tiles/<split>/images/<slide>_<x>_<y>.png`, `masks/<slide>_<x>_<y>.png`
 (lossless labels) and `tiles.csv`.
 
+Tiles from elsewhere, without `tiles.csv`: pass the two directories and files
+are paired by stem (images without a mask, and masks without an image, are
+skipped with a warning).
+
+```python
+bcss = TileFolderDataset(images="tissue-bcss/images", masks="tissue-bcss/masks")
+```
+
+Images of different sizes cannot be batched as they are: crop them to one size
+in the transform, e.g. `train_transform(crop=512)`.
+
 Both datasets take `transform(tile, mask)`, called with the `(H, W, 3)` uint8
 tile and `(H, W)` uint8 mask; its return value is the sample. Use it for
 augmentation:

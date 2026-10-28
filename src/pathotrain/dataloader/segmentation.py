@@ -198,19 +198,48 @@ def export_tiles(
 
 
 class TileFolderDataset(Dataset):
-    """``(image, mask)`` pairs written by :func:`export_tiles`, read from ``root/tiles.csv``."""
+    """``(image, mask)`` tile pairs from disk.
 
-    def __init__(self, root: str | Path, transform: Transform | None = None) -> None:
-        self.root = Path(root)
+    Either ``root`` written by :func:`export_tiles` (read from ``root/tiles.csv``),
+    or ``images`` and ``masks`` directories whose files are paired by stem
+    (``a.png`` with ``a.png``, or ``a.jpg`` with ``a.png``); files without a
+    partner are skipped with a warning.
+
+    Example::
+
+        train = TileFolderDataset("tiles/train")
+        tumor = TileFolderDataset(images="tumor/images", masks="tumor/masks")
+    """
+
+    def __init__(
+        self,
+        root: str | Path | None = None,
+        transform: Transform | None = None,
+        *,
+        images: str | Path | None = None,
+        masks: str | Path | None = None,
+    ) -> None:
         self.transform = transform
-        with open(self.root / "tiles.csv", newline="") as f:
-            self.rows = list(csv.DictReader(f))
+        if (root is None) == (images is None) or (images is None) != (masks is None):
+            raise ValueError("pass either root or both images and masks")
+        if root is not None:
+            root = Path(root)
+            with open(root / "tiles.csv", newline="") as f:
+                self.pairs = [(root / r["image"], root / r["mask"]) for r in csv.DictReader(f)]
+            return
+        tiles, labels = _by_stem([images], None), _by_stem([masks], None)
+        for stem in sorted(tiles.keys() - labels.keys()):
+            logger.warning("image {} has no mask, skipped", tiles[stem])
+        for stem in sorted(labels.keys() - tiles.keys()):
+            logger.warning("mask {} has no image, skipped", labels[stem])
+        self.pairs = [(tiles[s], labels[s]) for s in sorted(tiles.keys() & labels.keys())]
+        if not self.pairs:
+            raise ValueError(f"no image in {images} matches a mask in {masks}")
 
     def __len__(self) -> int:
-        return len(self.rows)
+        return len(self.pairs)
 
     def __getitem__(self, index: int) -> object:
-        row = self.rows[index]
-        tile = np.asarray(Image.open(self.root / row["image"]).convert("RGB"))
-        mask = np.asarray(Image.open(self.root / row["mask"]))
-        return _sample(tile, mask, self.transform)
+        image, mask = self.pairs[index]
+        tile = np.asarray(Image.open(image).convert("RGB"))
+        return _sample(tile, np.asarray(Image.open(mask)), self.transform)
