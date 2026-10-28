@@ -1,10 +1,12 @@
 from pathotrain.segmentation.encoders import ViTPyramidEncoder, build_fm_model
-from pathotrain.segmentation.losses import CEDiceLoss
+from pathotrain.segmentation.losses import CEDiceLoss, FocalDiceLoss, FocalLoss
 from pathotrain.segmentation.models import build_model, nnunet
 from pathotrain.segmentation.task import SegmentationTask
 
 __all__ = [
     "CEDiceLoss",
+    "FocalDiceLoss",
+    "FocalLoss",
     "SegmentationTask",
     "ViTPyramidEncoder",
     "build_fm_model",

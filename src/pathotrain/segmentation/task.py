@@ -2,6 +2,7 @@ import torch
 from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
+from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassJaccardIndex
 
 from pathotrain.engine.task import Task
@@ -12,7 +13,8 @@ class SegmentationTask(Task):
     """Semantic segmentation on ``(image, mask)`` batches, as produced by
     ``SegmentationDataset`` with ``train_transform`` / ``eval_transform``.
 
-    Logs per-class IoU as ``val/iou_<name>`` and their mean as ``val/miou``. A
+    Logs the validation loss as ``val/loss``, per-class IoU as ``val/iou_<name>``
+    and their mean as ``val/miou``. A
     class absent from both prediction and target over the whole validation set
     has no IoU and is left out of the mean.
 
@@ -39,6 +41,7 @@ class SegmentationTask(Task):
         super().__init__()
         self.model = model
         self.loss = loss or CEDiceLoss(ignore_index)
+        self.ignore_index = ignore_index
         self.lr = lr
         self.weight_decay = weight_decay
         self.class_names = class_names or [str(i) for i in range(num_classes)]
@@ -47,6 +50,7 @@ class SegmentationTask(Task):
         self.iou = MulticlassJaccardIndex(
             num_classes, average="none", ignore_index=ignore_index, zero_division=float("nan")
         )
+        self.val_loss = MeanMetric()
 
     def training_step(self, batch: tuple[Tensor, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         image, mask = batch
@@ -55,13 +59,18 @@ class SegmentationTask(Task):
 
     def validation_step(self, batch: tuple[Tensor, Tensor]) -> None:
         image, mask = batch
-        self.iou.update(self.model(image).argmax(1), mask)
+        logits = self.model(image).float()
+        # Weight by labelled pixels, so the epoch value is the per-pixel mean.
+        self.val_loss.update(self.loss(logits, mask), (mask != self.ignore_index).sum())
+        self.iou.update(logits.argmax(1), mask)
 
     def compute_metrics(self) -> dict[str, float]:
         iou = self.iou.compute()
         self.iou.reset()
         metrics = {f"val/iou_{n}": v.item() for n, v in zip(self.class_names, iou, strict=True)}
         metrics["val/miou"] = torch.nanmean(iou).item()
+        metrics["val/loss"] = self.val_loss.compute().item()
+        self.val_loss.reset()
         return metrics
 
     def configure_optimizers(self, total_steps: int) -> tuple[Optimizer, LRScheduler]:

@@ -152,7 +152,7 @@ metrics = trainer.fit(
 )
 ```
 
-- `val/miou` and `val/iou_<class>` are logged after every epoch. Pixels set to
+- `val/loss`, `val/miou` and `val/iou_<class>` are logged after every epoch. Pixels set to
   255 (outside the ROI, or uncovered by augmentation) are excluded from both
   the loss and the metrics.
 - Model selection: `ModelCheckpoint` keeps `best.ckpt` by `val/miou` (higher
@@ -204,7 +204,7 @@ trainer = Trainer(
 Each run writes to `logs/pathotrain/version_<n>/`:
 
 - `metrics.csv` has one row per log, with columns `step`, `epoch`, `train/loss`,
-  `train/lr`, `val/miou`, `val/iou_<class>` and finally `best/...`.
+  `train/lr`, `val/loss`, `val/miou`, `val/iou_<class>` and finally `best/...`.
   - `log_interval="epoch"` (default): one row per epoch. `train/loss` is the mean
     over the epoch's steps (and all GPUs), and `train/lr` is the rate at the end
     of the epoch.
