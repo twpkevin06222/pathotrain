@@ -9,7 +9,6 @@ build/
 .claude
 
 # Not part of the first stage yet.
-src/pathotrain/detection/
 src/pathotrain/histossl/
 src/pathotrain/pathogen/
 src/pathotrain/registration/

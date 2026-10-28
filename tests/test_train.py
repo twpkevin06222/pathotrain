@@ -1,11 +1,19 @@
 import mlflow
+import numpy as np
 import pytest
 import torch
+from PIL import Image
 from torch.utils.data import TensorDataset
 
 from pathotrain.segmentation import FocalDiceLoss
 from pathotrain.segmentation import train as train_module
-from pathotrain.segmentation.train import build_loss, load_model, normalisation, train
+from pathotrain.segmentation.train import (
+    build_dataset,
+    build_loss,
+    load_model,
+    normalisation,
+    train,
+)
 
 
 def _cfg(out):
@@ -98,3 +106,16 @@ def test_config_example_is_valid():
         *inspect.signature(TileGenerator.__init__).parameters,
     }
     assert set(cfg["data"]) - {"train", "val"} <= allowed
+
+
+def test_build_dataset_reads_tile_folders(tmp_path):
+    images, masks = tmp_path / "images", tmp_path / "masks"
+    images.mkdir()
+    masks.mkdir()
+    Image.fromarray(np.zeros((8, 8, 3), np.uint8)).save(images / "a.png")
+    Image.fromarray(np.ones((8, 8), np.uint8)).save(masks / "a.png")
+    cfg = {"data": {"class_map": {"tumor": 1}, "train": {"images": images, "masks": masks}}}
+    ds = build_dataset(cfg, "train", None)
+    assert len(ds) == 1 and ds[0][1].shape == (8, 8)
+    with pytest.raises(TypeError):
+        build_dataset({"data": {"train": {"images": images, "mask": masks}}}, "train", None)

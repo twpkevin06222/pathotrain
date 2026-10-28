@@ -1,5 +1,7 @@
 import numpy as np
 import pytest
+import torch
+from PIL import Image
 from torch.utils.data import Dataset
 
 from pathotrain.dataloader import SegmentationDataset, TileFolderDataset, find_pairs
@@ -55,3 +57,25 @@ def test_locate_spans_slides():
 def test_datasets_are_torch_datasets():
     assert issubclass(SegmentationDataset, Dataset)
     assert issubclass(TileFolderDataset, Dataset)
+
+
+def test_tile_folder_pairs_image_and_mask_dirs_by_stem(tmp_path):
+    images, masks = tmp_path / "images", tmp_path / "masks"
+    images.mkdir()
+    masks.mkdir()
+    for name in ("a", "b"):
+        Image.fromarray(np.full((4, 6, 3), 200, np.uint8)).save(images / f"{name}.jpg")
+    for name in ("a", "c"):  # b has no mask, c no image
+        Image.fromarray(np.full((4, 6), 2, np.uint8)).save(masks / f"{name}.png")
+
+    ds = TileFolderDataset(images=images, masks=masks)
+    assert ds.pairs == [(images / "a.jpg", masks / "a.png")]
+    image, mask = ds[0]
+    assert image.shape == (3, 4, 6) and image.dtype == torch.float32
+    assert mask.shape == (4, 6) and mask.dtype == torch.int64 and mask.max() == 2
+
+    for bad in ({}, {"root": tmp_path, "images": images}, {"images": images}):
+        with pytest.raises(ValueError, match="either root"):
+            TileFolderDataset(**bad)
+    with pytest.raises(ValueError, match="no image"):
+        TileFolderDataset(images=images, masks=touch(tmp_path / "empty"))

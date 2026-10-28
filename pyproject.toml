@@ -25,6 +25,13 @@ dependencies = [
     "transformers>=4.57",
 ]
 
+[project.optional-dependencies]
+detection = [
+    "pycocotools>=2.0.8",
+    "rfdetr==1.11.2",
+    "torch-hungarian==0.1.0rc0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

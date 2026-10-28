@@ -3,6 +3,7 @@
 from pathotrain.engine.callbacks import EarlyStopping, ModelCheckpoint, OptunaPruning
 from pathotrain.engine.config import dump_config, flatten, load_config
 from pathotrain.engine.logger import CSVLogger, MLflowLogger
+from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.sweep import sweep, write_trials_csv
 from pathotrain.engine.task import Task
 from pathotrain.engine.trainer import Trainer, TrainerConfig
@@ -20,5 +21,6 @@ __all__ = [
     "flatten",
     "load_config",
     "sweep",
+    "warmup_cosine",
     "write_trials_csv",
 ]
