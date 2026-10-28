@@ -1,0 +1,95 @@
+# Experiment config for `python -m pathotrain.segmentation.train config.yaml`.
+# Copy it, set the paths under `data`, and change what you need. Values shown are
+# the defaults unless marked "example"; sections marked optional can be deleted.
+
+name: exp01                 # MLflow experiment name
+seed: 0
+output_dir: runs/exp01      # config.yaml, checkpoints/ and logs/; one per experiment
+# Input normalisation matching the encoder: IMAGENET_MEAN/STD for ImageNet encoders,
+# MIDNIGHT_MEAN/STD for midnight-12k, or 3 numbers in [0, 1] units.
+mean: IMAGENET_MEAN
+std: IMAGENET_STD
+
+# build_model(**model): "smp:<arch>" (unet, unetplusplus, fpn, deeplabv3plus, segformer,
+# upernet, ...) or "nnunet:plain" / "nnunet:resenc". Other keys go to the builder.
+model:
+  name: smp:unet
+  num_classes: 8            # example; classes including background (label 0)
+  encoder_name: resnet34    # example; or midnight-12k (then set mean/std to MIDNIGHT_*)
+  encoder_weights: imagenet # null for midnight-12k, which loads its own weights
+  # encoder_kwargs: {freeze: true}  # midnight-12k only: false fine-tunes the backbone
+
+# Optional; default CEDiceLoss. CEDiceLoss, FocalLoss or FocalDiceLoss, other keys go to it.
+loss:
+  name: CEDiceLoss
+  dice_weight: 1.0
+  # gamma: 2.0              # FocalLoss / FocalDiceLoss
+  # class_weights: [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # one per class
+
+# Optional; SegmentationTask. AdamW, linear warmup, then cosine decay to 0.
+task:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  warmup_epochs: 0          # e.g. 1; fractions work
+  ignore_index: 255         # mask value skipped by the loss and metrics
+  # class_names: [background, tumor, ...]  # IoU keys val/iou_<name>; default 0, 1, ...
+
+# Optional; TrainerConfig.
+trainer:
+  max_epochs: 10
+  precision: bf16-mixed     # or 16-mixed, 32-true
+  accelerator: auto
+  strategy: auto            # e.g. ddp for several GPUs
+  devices: auto
+  accumulate: 1             # batches per optimizer step
+  grad_clip: null           # max gradient norm, e.g. 1.0
+  log_interval: epoch       # or step (train loss every log_every steps)
+  log_every: 50
+
+# Optional; ModelCheckpoint keeps best.ckpt (by monitor) and last.ckpt.
+checkpoint:
+  monitor: val/miou         # or val/loss with mode: min, or val/iou_<class>
+  mode: max
+  log_artifact: false       # true uploads best.ckpt to MLflow
+
+# Optional; delete to train all max_epochs.
+early_stopping:
+  monitor: val/miou
+  mode: max
+  patience: 10
+
+# Optional; train_transform. Validation uses the same crop and normalisation.
+augmentation:
+  n: 3                      # H&E RandAugment ops per tile; 0 turns it off
+  m: 5                      # their magnitude
+  crop: null                # random crop size; tile larger than this for shifts
+  blur: 0.0                 # probability of scanner-like blur, noise, JPEG
+  noise: 0.0
+  jpeg: 0.0
+
+# Optional; keyword arguments for both DataLoaders.
+loader:
+  batch_size: 16
+  num_workers: 8
+  # pin_memory: true        # default when a CUDA GPU is present; false turns it off
+  # multiprocessing_context: forkserver  # needed with backend: fastslide
+  # persistent_workers: true             # keep workers between epochs
+
+data:
+  # Plain-value SegmentationTileGenerator options, shared by both splits.
+  class_map:                # example; annotation class name -> mask label (1-255)
+    tumor: 1
+    stroma: 2
+  object_mask_overlap: 0.2  # keep a tile if annotations cover this fraction of it
+  roi_class: null           # e.g. roi: objects outlining the annotated region;
+                            # mask pixels outside it become ignore_index
+  # backend: openslide      # or fastslide (see loader.multiprocessing_context)
+  # Per split: lists of slide and GeoJSON directories, matched by file stem.
+  train:
+    slides: [data/train/slides]            # example paths
+    annotations: [data/train/annotations]
+    tiling: {tile_size: 256, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
+  val:                      # optional; without it there is no validation or best.ckpt
+    slides: [data/val/slides]
+    annotations: [data/val/annotations]
+    tiling: {tile_size: 256, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
