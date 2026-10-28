@@ -31,7 +31,7 @@ under a run.
 ```python
 from pathotrain.pathofm import build_encoder, load_backbone
 
-backbone = load_backbone("midnight-12k") # Dinov2Model, fp32
+backbone = load_backbone("midnight-12k")                # Dinov2Model, fp32
 backbone, transform = build_encoder("spectra-midnight-12k")  # + model-card preprocessing
 ```
 
