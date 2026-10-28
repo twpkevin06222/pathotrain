@@ -66,10 +66,49 @@ GeoJSON annotations, tiled on the fly) with `train_transform(boxes=True)` and
 
 **Logged:** `train/loss` with `train/loss_ce`, `train/loss_bbox` and
 `train/loss_giou`; per epoch `val/loss`, COCO `val/map` (IoU 0.5:0.95),
-`val/map_50`, `val/map_75`, `val/mar_100` and `val/ap_<class>`.
+`val/map_50`, `val/map_75`, `val/mar_300` and `val/ap_<class>`, counting up
+to 300 predictions per image (RF-DETR's output) rather than COCO's 100.
 
 **Optimiser:** RF-DETR's recipe. AdamW with `lr=1e-4` for the heads,
 `lr * 0.7` for the decoder, `lr_encoder=1.5e-4` for the backbone with layer-wise
 decay 0.8 towards the input, weight decay `1e-4` (none on norms, biases and
 embeddings), gradient clipping at 0.1. The schedule is pathotrain's warmup plus
 cosine; RF-DETR's model EMA is not used.
+
+### From a config file
+
+The same setup without writing a script: one YAML file per experiment. Copy
+[`config.example.yaml`](config.example.yaml), which lists every section with its defaults.
+
+```bash
+python -m pathotrain.detection.train config.yaml
+python -m pathotrain.detection.train config.yaml --resume runs/det01/checkpoints/last.ckpt
+```
+
+```yaml
+name: det01                 # MLflow experiment
+seed: 0
+output_dir: runs/det01      # config.yaml, checkpoints/, logs/
+mean: IMAGENET_MEAN
+std: IMAGENET_STD
+model: {name: "rfdetr:nano", num_classes: 2}
+task: {warmup_epochs: 1, class_names: [class01, class02]}
+trainer: {max_epochs: 50, precision: bf16-mixed}   # grad_clip defaults to 0.1
+early_stopping: {patience: 10}                     # monitors val/map
+loader: {batch_size: 8, num_workers: 8}
+data:
+  class_map: {class01: 0, class02: 1}              # the rest goes to DetectionTileGenerator
+  roi_class: roi
+  min_box_visibility: 0.6
+  train: {slides: [data/train/slides], annotations: [data/train/geojson], tiling: {tile_size: 384, tile_mpp: 0.5}}
+  val: {root: tiles/valid}                         # or a COCO folder from export_detection_tiles
+```
+
+- The config is copied to `output_dir/config.yaml`, uploaded to the MLflow run,
+  logged as flat params and stored in both checkpoints. A changed config for
+  the same `output_dir` is refused unless resuming.
+- `checkpoint` and `early_stopping` monitor `val/map` by default.
+- `model.num_classes` must match the classes of each split (`class_map` labels,
+  or a COCO folder's categories); a mismatch fails before training.
+- `load_model("runs/det01/checkpoints/best.ckpt")` returns the trained
+  `Detector` and its config.
