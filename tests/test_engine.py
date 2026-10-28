@@ -66,7 +66,7 @@ def test_fit_logs_checkpoints_and_resumes(tmp_path, tracking):
     )
     metrics = trainer.fit(_task(), _loader(), _loader(), hparams={"arch": "smp:unet"})
 
-    assert set(metrics) == {"val/iou_background", "val/iou_tumor", "val/miou"}
+    assert set(metrics) == {"val/iou_background", "val/iou_tumor", "val/miou", "val/loss"}
     assert trainer.step == 3 * 2  # 4 batches, 2 per optimizer step
 
     best = torch.load(tmp_path / "best.ckpt", weights_only=False)
@@ -79,6 +79,7 @@ def test_fit_logs_checkpoints_and_resumes(tmp_path, tracking):
     (run,) = tracking.search_runs([tracking.get_experiment_by_name("pathotrain").experiment_id])
     assert run.info.status == "FINISHED"
     assert run.data.params["arch"] == "smp:unet" and "val/miou" in run.data.metrics
+    assert "val/loss" in run.data.metrics
     assert run.data.metrics["best/val/miou"] == checkpoint.best
     assert run.data.params["best_checkpoint"] == str(tmp_path / "best.ckpt")
     assert [a.path for a in tracking.list_artifacts(run.info.run_id)] == ["best.ckpt"]
@@ -107,6 +108,7 @@ def test_csv_logger_writes_epoch_or_step_rows(tmp_path, interval, rows):
     epoch_rows = [r for r in metrics if r["val/miou"]]
     step_rows = [r for r in metrics if not r["val/miou"] and not r["best/val/miou"]]
     assert [r["epoch"] for r in epoch_rows] == ["1", "2"]
+    assert all(r["val/loss"] for r in epoch_rows)
     assert len(step_rows) == rows - 2
     # Train loss and lr are logged once: per epoch, or per step.
     train_rows = epoch_rows if interval == "epoch" else step_rows
