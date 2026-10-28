@@ -105,6 +105,11 @@ class SegmentationDataset(Dataset):
     overlap selection); tiles and masks are read from the slide per item.
     Keyword arguments go to :class:`patchology.SegmentationTileGenerator`
     (``class_map``, ``roi_class``, ``object_mask_overlap``, ``tiling``, ...).
+
+    Each generator's thumbnail and tissue masks are released after tiling (see
+    ``release_overviews``); ``generators[k].overlay(slide=generators[k].slide)``
+    still draws its tiles and ground truth. For tissue masks, build a
+    ``SegmentationTileGenerator`` for that slide yourself.
     """
 
     # shortcut: every slide stays open for the dataset's lifetime; for thousands of
@@ -120,9 +125,10 @@ class SegmentationDataset(Dataset):
         self.generators = []
         try:
             for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):
-                self.generators.append(
-                    SegmentationTileGenerator(slide, ground_truth, **generator_kwargs)
-                )
+                gen = SegmentationTileGenerator(slide, ground_truth, **generator_kwargs)
+                # Free thumbnail and masks (~40 MB a slide) as soon as tiling is done.
+                gen.release_overviews()
+                self.generators.append(gen)
         except Exception:
             self.close()
             raise
