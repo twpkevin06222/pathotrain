@@ -6,6 +6,7 @@ GPUs, launch the script with ``fabric run`` or ``torchrun``, or set
 ``devices`` and let :meth:`Trainer.fit` spawn the processes.
 """
 
+import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -92,9 +93,10 @@ class Trainer:
 
         Args:
             hparams: Extra hyperparameters to log next to the trainer config.
-            ckpt_path: Resume model, optimizer, scheduler, counters and callback
-                state from a full checkpoint written by :meth:`save` (e.g.
-                ``last.ckpt``).
+            ckpt_path: Resume model, optimizer, counters and callback state from a
+                full checkpoint written by :meth:`save` (e.g. ``last.ckpt``). The
+                scheduler is rebuilt for this run's length and replayed to the saved
+                step, so ``max_epochs`` may change; it must depend on the step only.
         """
         fabric, c = self.fabric, self.config
         fabric.launch()
@@ -186,7 +188,6 @@ class Trainer:
         state = {"model": self.task.model, "epoch": self.epoch, "step": self.step, **extra}
         if not weights_only:
             state["optimizer"] = self.optimizer
-            state["scheduler"] = None if self.scheduler is None else self.scheduler.state_dict()
             state["callbacks"] = {
                 key: cb.state_dict() for key, cb in self._stateful_callbacks().items()
             }
@@ -196,7 +197,14 @@ class Trainer:
         # Fabric restores the model and optimizer in place and returns the other entries.
         rest = self.fabric.load(path, {"model": self.task.model, "optimizer": self.optimizer})
         if self.scheduler is not None:
-            self.scheduler.load_state_dict(rest["scheduler"])
+            # A saved scheduler state would carry the old run length (cosine T_max), so a
+            # longer resumed run would raise the lr again; replay the new schedule instead.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", "Detected call of `lr_scheduler.step", UserWarning
+                )
+                for _ in range(rest["step"]):
+                    self.scheduler.step()
         for key, cb in self._stateful_callbacks().items():
             if key in rest["callbacks"]:
                 cb.load_state_dict(rest["callbacks"][key])

@@ -77,7 +77,7 @@ def test_fit_logs_checkpoints_and_resumes(tmp_path, tracking):
     last = torch.load(tmp_path / "last.ckpt", weights_only=False)
     assert "optimizer" not in best and best["value"] == checkpoint.best
     assert best["epoch"] == checkpoint.best_epoch and best["monitor"] == "val/miou"
-    assert {"optimizer", "scheduler", "callbacks"} <= last.keys()
+    assert {"optimizer", "callbacks"} <= last.keys()
     _task().model.load_state_dict(best["model"])  # plain keys, loads without Fabric
 
     (run,) = tracking.search_runs([tracking.get_experiment_by_name("pathotrain").experiment_id])
@@ -98,6 +98,12 @@ def test_fit_logs_checkpoints_and_resumes(tmp_path, tracking):
     longer = Trainer(TrainerConfig(max_epochs=4, **CPU))
     longer.fit(_task(), _loader(), _loader(), ckpt_path=tmp_path / "last.ckpt")
     assert (longer.epoch, longer.step) == (4, 3 * 2 + 4)
+    # The lr follows the 4-epoch schedule from the resumed step, not the old 3-epoch one.
+    fresh, schedule = _task().configure_optimizers(longer.step, 4)
+    for _ in range(longer.step):
+        fresh.step()
+        schedule.step()
+    assert longer.optimizer.param_groups[0]["lr"] == pytest.approx(fresh.param_groups[0]["lr"])
 
 
 @pytest.mark.parametrize(("interval", "rows"), [("epoch", 2), ("step", 2 * 4 + 2)])
