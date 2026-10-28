@@ -31,7 +31,7 @@ under a run.
 ```python
 from pathotrain.pathofm import build_encoder, load_backbone
 
-backbone = load_backbone("midnight-12k")                # Dinov2Model, fp32
+backbone = load_backbone("midnight-12k") # Dinov2Model, fp32
 backbone, transform = build_encoder("spectra-midnight-12k")  # + model-card preprocessing
 ```
 
@@ -63,7 +63,7 @@ from pathotrain.pathofm import classification_embedding, segmentation_embedding
 
 with torch.inference_mode(), torch.autocast("cuda", torch.bfloat16):
     vec = classification_embedding(backbone, batch)  # (B, 3072), one vector per tile
-    grid = segmentation_embedding(backbone, batch)   # (B, 1536, 16, 16) for 224 px tiles
+    grid = segmentation_embedding(backbone, batch)  # (B, 1536, 16, 16) for 224 px tiles
 ```
 
 - **Intermediate layers:** for other layers, call
