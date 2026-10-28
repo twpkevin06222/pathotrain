@@ -1,10 +1,11 @@
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, LRScheduler, SequentialLR
+from torch.optim.lr_scheduler import LRScheduler
 from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassJaccardIndex
 
+from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.task import Task
 from pathotrain.segmentation.losses import CEDiceLoss
 
@@ -83,12 +84,4 @@ class SegmentationTask(Task):
         self, total_steps: int, steps_per_epoch: int
     ) -> tuple[Optimizer, LRScheduler]:
         optimizer = AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        warmup = round(self.warmup_epochs * steps_per_epoch)
-        if warmup >= total_steps:
-            raise ValueError(f"{warmup} warmup steps leave none of the {total_steps} to decay")
-        cosine = CosineAnnealingLR(optimizer, T_max=total_steps - warmup)
-        if warmup == 0:
-            return optimizer, cosine
-        # The first step runs at lr / warmup, step `warmup` at the full lr.
-        linear = LinearLR(optimizer, start_factor=1 / warmup, total_iters=warmup - 1)
-        return optimizer, SequentialLR(optimizer, [linear, cosine], milestones=[warmup])
+        return optimizer, warmup_cosine(optimizer, total_steps, steps_per_epoch, self.warmup_epochs)
