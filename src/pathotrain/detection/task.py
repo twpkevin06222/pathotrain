@@ -9,9 +9,9 @@ from torchmetrics import MeanMetric
 from torchmetrics.detection import MeanAveragePrecision
 from torchvision.ops import box_convert
 
+from pathotrain.detection.models import Detector
 from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.task import Task
-from pathotrain.detection.models import Detector
 
 Targets = list[dict[str, Tensor]]
 

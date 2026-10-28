@@ -126,6 +126,63 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
 `HEDJitter`, `HSVJitter`, `Enhance` and `RandomRot90` are torchvision v2 transforms, so
 they also fit in your own `v2.Compose` (wrap inputs as `tv_tensors.Image` / `Mask`).
 
+## Detection dataloader
+
+`DetectionDataset` is the detection counterpart of `SegmentationDataset`: the
+same slide and GeoJSON directories, with keyword arguments going to
+`patchology.DetectionTileGenerator`. Each annotated object becomes the
+bounding box of its polygon.
+
+```python
+from torch.utils.data import DataLoader
+from patchology import TilingConfig
+from pathotrain.dataloader import DetectionDataset
+from pathotrain.dataloader.augmentation import eval_transform, train_transform
+from pathotrain.detection import collate
+
+kwargs = dict(
+    class_map={"class01": 0, "class02": 1},  # labels 0 .. num_classes - 1
+    roi_class="roi",
+    min_box_visibility=0.6,  # keep an object cut by the tile edge if 60% of its box shows
+    min_objects=1,           # keep tiles with at least one object (0 adds empty tiles)
+    tiling=TilingConfig(tile_size=512, tile_mpp=0.5),
+)
+train = DetectionDataset(slides, annotations, transform=train_transform(boxes=True), **kwargs)
+val = DetectionDataset(val_slides, val_annotations, transform=eval_transform(boxes=True), **kwargs)
+loader = DataLoader(train, batch_size=8, shuffle=True, num_workers=4, collate_fn=collate)
+for images, targets in loader:  # (B, 3, H, W); one {"boxes", "labels"} dict per image
+    ...
+```
+
+**Offline:** write tiles and a COCO `_annotations.coco.json` once per split,
+then train from disk.
+
+```python
+from pathotrain.dataloader import DetectionTileFolderDataset, export_detection_tiles
+
+export_detection_tiles(slides, annotations, "tiles", "train", **kwargs)
+export_detection_tiles(val_slides, val_annotations, "tiles", "valid", **kwargs)
+train = DetectionTileFolderDataset("tiles/train", transform=train_transform(boxes=True))
+```
+
+Layout: `tiles/<split>/<slide>_<x>_<y>.png` and `tiles/<split>/_annotations.coco.json`
+(boxes `[x, y, w, h]` in tile pixels, `category_id = label + 1`, each image's
+`slide`, `x`, `y`). This is Roboflow's layout, which RF-DETR's own trainer and
+other COCO tools read; name the splits `train`, `valid` and `test` for them.
+`DetectionTileFolderDataset` reads any COCO folder in this layout, with labels
+in category id order (names in `ds.class_names`).
+
+- A sample is the image and `{"boxes": (N, 4) float32 [x1, y1, x2, y2] pixels,
+  "labels": (N,) int64}`, as `pathotrain.detection.DetectionTask` takes.
+  `collate` keeps the targets as a list, since `N` differs per tile.
+- `class_map` is required, with labels `0 .. num_classes - 1`; several
+  annotation classes may share a label.
+- `boxes=True` makes the transforms move boxes with the tile (flips, 90 degree
+  turns, crop, RandAugment's translate, shear and rotate), clip them to it and
+  drop those under 1 px. Rotation and shear grow a box to enclose its turned
+  corners. A crop clips boxes without applying `min_box_visibility` again, so
+  prefer tiling at the training size to cropping.
+
 ## Tests
 
 ```bash

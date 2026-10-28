@@ -50,6 +50,10 @@ trainer.fit(
 )
 ```
 
+`train` and `val` can be `pathotrain.dataloader.DetectionDataset` (slides and
+GeoJSON annotations, tiled on the fly) with `train_transform(boxes=True)` and
+`eval_transform(boxes=True)`; see the [dataloader README](../dataloader/README.md#detection-dataloader).
+
 **What a dataset must return**, per sample `(image, target)`:
 
 - `image`: `(3, H, W)` float tensor, ImageNet-normalised
