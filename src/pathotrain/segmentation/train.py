@@ -21,7 +21,8 @@ Sections (``?`` marks optional ones)::
     early_stopping?: {...}      # EarlyStopping; leave out to train every epoch
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
     loader?: {...}              # both DataLoaders (batch_size, num_workers, ...);
-                                # pin_memory defaults to true when CUDA is available
+                                # pin_memory defaults to true when CUDA is available,
+                                # persistent_workers to true for the training loader
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
@@ -152,7 +153,13 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         val_loader = DataLoader(val_set, **loader)
     return trainer.fit(
         task,
-        DataLoader(train_set, shuffle=True, **loader),
+        # Training workers persist (no per-epoch restart); val ones don't, so the two sets
+        # are not both held in RAM for the whole run.
+        DataLoader(
+            train_set,
+            shuffle=True,
+            **{"persistent_workers": loader.get("num_workers", 0) > 0, **loader},
+        ),
         val_loader,
         hparams=flatten(cfg),
         ckpt_path=resume,
