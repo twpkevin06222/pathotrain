@@ -19,7 +19,8 @@ uploaded to the MLflow run and logged as flat params; checkpoints store it too
     checkpoint?: {...}          # ModelCheckpoint; monitor defaults to val/map
     early_stopping?: {...}      # EarlyStopping (monitor val/map); leave out to train every epoch
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
-    loader?: {...}              # both DataLoaders, as for segmentation; collate_fn is set
+    loader?: {...}              # both DataLoaders, as for segmentation; collate_fn is set,
+                                # multiprocessing_context defaults to forkserver
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
@@ -94,6 +95,8 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         monitor="val/map",
         trainer_defaults={"grad_clip": 0.1},
         collate_fn=collate,
+        # Fresh workers: forking the threaded training process can deadlock them.
+        multiprocessing_context="forkserver",
     )
 
 
