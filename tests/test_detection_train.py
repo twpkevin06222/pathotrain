@@ -100,3 +100,23 @@ def test_config_example_is_valid():
     }
     assert set(cfg["data"]) - {"train", "val"} <= allowed
     assert len(set(cfg["data"]["class_map"].values())) == cfg["model"]["num_classes"]
+
+
+def test_export_writes_boxes_scores_and_labels(tmp_path):
+    ort = pytest.importorskip("onnxruntime")
+    from pathotrain.detection import build_detector
+    from pathotrain.detection.export import export
+
+    cfg = _cfg(tmp_path / "run")
+    cfg["data"]["train"] = {"slides": [], "annotations": [], "tiling": {"tile_size": 128}}
+    model = build_detector(**cfg["model"]).model
+    torch.save({"model": model.state_dict(), "config": cfg}, tmp_path / "m.ckpt")
+    with pytest.raises(ValueError, match="multiple of 32"):
+        export(tmp_path / "m.ckpt", tmp_path / "m.onnx", size=100)
+    path = export(tmp_path / "m.ckpt", tmp_path / "m.onnx")  # checks ONNX against PyTorch
+
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    boxes, scores, labels = session.run(None, {"image": np.zeros((3, 3, 128, 128), np.float32)})
+    assert boxes.shape == (3, 300, 4) and scores.shape == labels.shape == (3, 300)
+    assert (np.diff(scores, axis=1) <= 0).all() and set(np.unique(labels)) <= {0, 1}
+    assert boxes.min() >= 0 and boxes.max() <= 128

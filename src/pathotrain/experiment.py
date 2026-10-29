@@ -1,13 +1,19 @@
-"""Plumbing shared by the config-driven train and eval commands
+"""Plumbing shared by the config-driven train, eval and export commands
 (:mod:`pathotrain.segmentation.train`, :mod:`pathotrain.detection.train` and their
-``eval`` modules)."""
+``eval`` and ``export`` modules)."""
 
+import json
+import tempfile
 from pathlib import Path
 
+import numpy as np
 import torch
 from lightning_fabric import seed_everything
+from loguru import logger
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from patchology import TilingConfig
 from pathotrain.dataloader.augmentation import IMAGENET_MEAN, IMAGENET_STD
 from pathotrain.engine import (
     CSVLogger,
@@ -144,3 +150,105 @@ def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
     if not loader.get("num_workers"):  # DataLoader refuses a context without workers
         loader.pop("multiprocessing_context", None)
     return loader
+
+
+def input_size(cfg: dict) -> int | None:
+    """The side of the tiles the model trained on: ``augmentation.crop``, else the
+    train split's ``tile_size``; None for tile folders without a crop."""
+    crop = cfg.get("augmentation", {}).get("crop")
+    train = cfg["data"]["train"]
+    if crop is None and "slides" not in train:
+        return None
+    return crop or TilingConfig(**train.get("tiling", {})).tile_size
+
+
+def onnx_metadata(cfg: dict, task: str, size: int, outputs: dict[str, str]) -> dict:
+    """What an inference runtime needs besides the graph: preprocessing, the tiling
+    the model trained on and the classes. ``outputs`` describes each graph output."""
+    train = cfg["data"]["train"]
+    num_classes = cfg["model"]["num_classes"]
+    return {
+        "task": task,
+        "model": cfg["model"]["name"],
+        "input": f"image: (batch, 3, {size}, {size}) float32 RGB; tile / 255, then (x - mean) / std",
+        "mean": normalisation(cfg, "mean"),
+        "std": normalisation(cfg, "std"),
+        "tile_size": size,
+        "tile_mpp": TilingConfig(**train.get("tiling", {})).tile_mpp if "slides" in train else None,
+        "num_classes": num_classes,
+        "class_names": cfg.get("task", {}).get("class_names")
+        or [str(i) for i in range(num_classes)],
+        "class_map": cfg["data"].get("class_map"),
+        "outputs": outputs,
+    }
+
+
+def export_onnx(
+    model: nn.Module,
+    path: str | Path,
+    size: int,
+    output_names: list[str],
+    metadata: dict,
+    opset: int = 17,
+    atol: float = 1e-3,
+) -> Path:
+    """Write ``model`` (images -> ``output_names`` tensors) to ``path`` as fp32 ONNX
+    with a dynamic batch, store ``metadata`` as JSON under the ``pathotrain`` metadata
+    key, and check ONNX Runtime against PyTorch on random images. Weights over 2 GB
+    go to ``<path>.data``, which must stay beside the graph.
+
+    Raises:
+        AssertionError: An output differs from PyTorch by more than ``atol`` (relative
+            to its largest magnitude when that is above 1).
+    """
+    try:
+        import onnx
+        import onnxruntime as ort
+    except ImportError as e:
+        raise ImportError(
+            "ONNX export needs the export extra: pip install 'pathotrain[export]'"
+        ) from e
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    model = model.eval().cpu().float()
+    names = ["image", *output_names]
+    # Over 2 GB the exporter writes one file per weight; trace into a scratch folder and
+    # save the weights as a single <name>.data beside the graph instead.
+    with tempfile.TemporaryDirectory(dir=path.parent) as tmp, torch.no_grad():
+        traced = Path(tmp) / path.name
+        torch.onnx.export(
+            model,
+            (torch.randn(1, 3, size, size),),
+            str(traced),
+            input_names=["image"],
+            output_names=output_names,
+            dynamic_axes={n: {0: "batch"} for n in names},
+            opset_version=opset,
+            do_constant_folding=True,
+            dynamo=False,  # the dynamo exporter needs onnxscript and misses RF-DETR's ops
+        )
+        external = len(list(Path(tmp).iterdir())) > 1
+        graph = onnx.load(str(traced))
+    graph.metadata_props.add(key="pathotrain", value=json.dumps(metadata))
+    onnx.save(
+        graph,
+        str(path),
+        save_as_external_data=external,
+        all_tensors_to_one_file=True,
+        location=f"{path.name}.data",
+    )
+
+    images = torch.randn(2, 3, size, size)  # another batch size than traced: checks the axis
+    with torch.no_grad():
+        expected = model(images)
+    expected = [expected] if isinstance(expected, torch.Tensor) else list(expected)
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    actual = session.run(output_names, {"image": images.numpy()})
+    for name, want, got in zip(output_names, expected, actual, strict=True):
+        want = want.numpy()
+        diff = float(np.abs(want.astype(np.float64) - got).max()) if want.size else 0.0
+        tol = atol * max(1.0, float(np.abs(want).max()) if want.size else 1.0)
+        assert diff <= tol, f"ONNX output {name!r} differs from PyTorch by {diff:.3g} (> {tol:.3g})"
+        logger.info(f"{name}: {tuple(got.shape)}, max |ONNX - PyTorch| = {diff:.2g}")
+    logger.info(f"wrote {path}")
+    return path

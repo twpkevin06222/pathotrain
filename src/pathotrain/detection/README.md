@@ -128,3 +128,22 @@ python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --split val
 - Prints the metrics as JSON keyed by the split (`test/map`, `test/ap_<class>`,
   ...). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - Scores are per tile: tile the split with `tile_overlap: 0` so no object counts twice.
+
+### ONNX export
+
+```bash
+pip install "pathotrain[detection,export]"   # adds onnx, onnxruntime
+python -m pathotrain.detection.export runs/det01/checkpoints/best.ckpt model.onnx
+```
+
+- Input `image` (batch, 3, size, size) float32, normalised as in training. The
+  graph includes the post-processing and returns the top 300 detections per
+  image, best first: `boxes` (batch, 300, 4) `[x1, y1, x2, y2]` tile pixels,
+  `scores` (batch, 300) and `labels` (batch, 300). Threshold the scores.
+- The batch is dynamic; the side is fixed to the training tile (or `--size`, a
+  multiple of 32), since the backbone's position embeddings are frozen to it.
+- The `pathotrain` metadata key holds JSON with `mean`, `std`, `tile_size`,
+  `tile_mpp`, `class_names` and `class_map`. Export checks ONNX Runtime against
+  PyTorch on random images.
+- Weights are fp32. Convert to fp16 or quantise to int8 from this file, then
+  check the result with the same tiles.
