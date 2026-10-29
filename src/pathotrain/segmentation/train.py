@@ -26,8 +26,9 @@ Sections (``?`` marks optional ones)::
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
-                                # or tiles on disk, per split (TileFolderDataset):
-                                # {root: dir} from export_tiles, or {images: dir, masks: dir}
+                                # or tiles on disk, per split (SegmentationTileFolderDataset):
+                                # {root: dir} from export_segmentation_tiles,
+                                # or {images: dir, masks: dir}
       ...                       # the rest goes to SegmentationTileGenerator for the
                                 # slide splits (class_map, roi_class, backend, ...)
 """
@@ -41,7 +42,7 @@ from torch.utils.data import Dataset
 
 from patchology import TilingConfig
 from pathotrain import experiment, segmentation
-from pathotrain.dataloader import SegmentationDataset, TileFolderDataset
+from pathotrain.dataloader import SegmentationDataset, SegmentationTileFolderDataset
 from pathotrain.dataloader.augmentation import eval_transform, train_transform
 from pathotrain.engine import load_config
 from pathotrain.experiment import normalisation
@@ -60,10 +61,10 @@ def build_loss(cfg: dict) -> nn.Module | None:
 
 def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     """``data[split]`` as a dataset: slides with annotations, tiled on the fly, or
-    tiles on disk (``root`` from ``export_tiles``, or ``images`` and ``masks``)."""
+    tiles on disk (``root`` from ``export_segmentation_tiles``, or ``images`` and ``masks``)."""
     s = cfg["data"][split]
     if "slides" not in s:
-        return TileFolderDataset(transform=transform, **s)
+        return SegmentationTileFolderDataset(transform=transform, **s)
     data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
     return SegmentationDataset(
         s["slides"],

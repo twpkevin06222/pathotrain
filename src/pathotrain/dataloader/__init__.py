@@ -8,16 +8,16 @@ from pathotrain.dataloader.detection import (
 )
 from pathotrain.dataloader.segmentation import (
     SegmentationDataset,
-    TileFolderDataset,
-    export_tiles,
+    SegmentationTileFolderDataset,
+    export_segmentation_tiles,
 )
 
 __all__ = [
     "DetectionDataset",
     "DetectionTileFolderDataset",
     "SegmentationDataset",
-    "TileFolderDataset",
+    "SegmentationTileFolderDataset",
     "export_detection_tiles",
-    "export_tiles",
+    "export_segmentation_tiles",
     "find_pairs",
 ]

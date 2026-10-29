@@ -58,11 +58,13 @@ for image, mask in loader:  # (B, 3, H, W) float32 in [0, 1], (B, H, W) int64
 **Offline:** write tiles and masks once per split, then train from disk.
 
 ```python
-from pathotrain.dataloader import TileFolderDataset, export_tiles
+from pathotrain.dataloader import SegmentationTileFolderDataset, export_segmentation_tiles
 
-export_tiles(slides, annotations, "tiles", "train", **kwargs)
-export_tiles(["data/val/slides"], ["data/val/geo_json_annotations"], "tiles", "val", **kwargs)
-train = TileFolderDataset("tiles/train")
+export_segmentation_tiles(slides, annotations, "tiles", "train", **kwargs)
+export_segmentation_tiles(
+    ["data/val/slides"], ["data/val/geo_json_annotations"], "tiles", "val", **kwargs
+)
+train = SegmentationTileFolderDataset("tiles/train")
 ```
 
 Layout: `tiles/<split>/images/<slide>_<x>_<y>.png`, `masks/<slide>_<x>_<y>.png`
@@ -73,7 +75,7 @@ are paired by stem (images without a mask, and masks without an image, are
 skipped with a warning).
 
 ```python
-bcss = TileFolderDataset(images="tissue-bcss/images", masks="tissue-bcss/masks")
+bcss = SegmentationTileFolderDataset(images="tissue-bcss/images", masks="tissue-bcss/masks")
 ```
 
 Images of different sizes cannot be batched as they are: crop them to one size

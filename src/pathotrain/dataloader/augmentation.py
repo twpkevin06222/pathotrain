@@ -2,7 +2,7 @@
 
 :func:`train_transform` and :func:`eval_transform` return a ``transform(tile, mask)``
 for :class:`~pathotrain.dataloader.SegmentationDataset` and
-:class:`~pathotrain.dataloader.TileFolderDataset`, or with ``boxes=True`` a
+:class:`~pathotrain.dataloader.SegmentationTileFolderDataset`, or with ``boxes=True`` a
 ``transform(tile, target)`` for :class:`~pathotrain.dataloader.DetectionDataset`.
 Both end in the same normalisation, so the splits never drift apart::
 

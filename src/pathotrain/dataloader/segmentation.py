@@ -8,8 +8,8 @@ Two ways to feed a PyTorch ``DataLoader``:
 
 * Lazy: :class:`SegmentationDataset` tiles every slide in ``__init__`` and
   reads each ``(tile, mask)`` from the slide on demand.
-* Offline: :func:`export_tiles` writes tiles and masks to
-  ``out_dir/<split>/{images,masks}/`` and :class:`TileFolderDataset` reads them back.
+* Offline: :func:`export_segmentation_tiles` writes tiles and masks to
+  ``out_dir/<split>/{images,masks}/`` and :class:`SegmentationTileFolderDataset` reads them back.
 
 Both are map-style ``torch.utils.data.Dataset`` subclasses for a ``DataLoader``
 with any ``num_workers``. A sample is ``(image, mask)``: a ``(3, H, W)`` float32
@@ -29,8 +29,8 @@ Example::
     train = SegmentationDataset(slides, annotations, **kwargs)
     loader = DataLoader(train, batch_size=16, shuffle=True, num_workers=4)
 
-    export_tiles(slides, annotations, "tiles", "train", **kwargs)
-    train = TileFolderDataset("tiles/train")
+    export_segmentation_tiles(slides, annotations, "tiles", "train", **kwargs)
+    train = SegmentationTileFolderDataset("tiles/train")
 """
 
 import csv
@@ -82,7 +82,7 @@ class SegmentationDataset(SlideDataset):
         return _sample(tile, mask, self.transform)
 
 
-def export_tiles(
+def export_segmentation_tiles(
     slide_dirs: Sequence[str | Path],
     annotation_dirs: Sequence[str | Path],
     out_dir: str | Path,
@@ -116,18 +116,18 @@ def export_tiles(
     return root
 
 
-class TileFolderDataset(Dataset):
+class SegmentationTileFolderDataset(Dataset):
     """``(image, mask)`` tile pairs from disk.
 
-    Either ``root`` written by :func:`export_tiles` (read from ``root/tiles.csv``),
+    Either ``root`` written by :func:`export_segmentation_tiles` (read from ``root/tiles.csv``),
     or ``images`` and ``masks`` directories whose files are paired by stem
     (``a.png`` with ``a.png``, or ``a.jpg`` with ``a.png``); files without a
     partner are skipped with a warning.
 
     Example::
 
-        train = TileFolderDataset("tiles/train")
-        tumor = TileFolderDataset(images="tumor/images", masks="tumor/masks")
+        train = SegmentationTileFolderDataset("tiles/train")
+        tumor = SegmentationTileFolderDataset(images="tumor/images", masks="tumor/masks")
     """
 
     def __init__(
