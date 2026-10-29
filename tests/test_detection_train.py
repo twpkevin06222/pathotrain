@@ -11,6 +11,7 @@ pytest.importorskip("rfdetr")
 from test_detection import _samples
 
 from pathotrain.detection import train as train_module
+from pathotrain.detection.eval import evaluate
 from pathotrain.detection.train import build_dataset, load_model, train
 
 
@@ -44,6 +45,19 @@ def test_train_from_config_and_rebuild_detector_from_checkpoint(tmp_path, monkey
     assert saved == cfg
     best = torch.load(tmp_path / "run/checkpoints/best.ckpt", weights_only=True)["model"]
     assert all(torch.equal(v, best[k]) for k, v in detector.model.state_dict().items())
+
+
+def test_evaluate_reproduces_the_last_validation(tmp_path, monkeypatch):
+    monkeypatch.setattr(train_module, "build_dataset", lambda cfg, split, transform: _samples())
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _cfg(tmp_path / "run")
+    metrics = train(cfg)
+    last = tmp_path / "run/checkpoints/last.ckpt"
+    # Same weights, same tiles: the last epoch's validation, keyed by the split.
+    assert evaluate(last, "val") == pytest.approx(metrics)
+    test = evaluate(last, config={"data": {**cfg["data"], "test": {}}})
+    assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
 
 
 def test_build_dataset_checks_classes_against_the_model(tmp_path):

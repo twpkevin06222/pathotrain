@@ -72,7 +72,8 @@ loader:
   batch_size: 16
   num_workers: 8
   # pin_memory: true        # default when a CUDA GPU is present; false turns it off
-  # multiprocessing_context: forkserver  # needed with backend: fastslide
+  # multiprocessing_context: forkserver  # default: forked workers of the threaded
+  #                                      # training process can deadlock; fork is faster
   # persistent_workers: true  # default for the training loader (num_workers > 0);
   #                           # setting it here applies to the val loader too
 

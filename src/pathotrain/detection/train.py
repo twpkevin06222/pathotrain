@@ -23,6 +23,7 @@ uploaded to the MLflow run and logged as flat params; checkpoints store it too
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
+      test?: {...}              # as val; scored only by the eval command
                                 # or a COCO folder per split: {root: dir} from
                                 # export_detection_tiles (DetectionTileFolderDataset)
       ...                       # the rest goes to DetectionTileGenerator for the slide
@@ -53,7 +54,7 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
         dataset = DetectionTileFolderDataset(transform=transform, **s)
         num_classes = len(dataset.class_names)
     else:
-        data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
+        data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val", "test", split)}
         dataset = DetectionDataset(
             s["slides"],
             s["annotations"],

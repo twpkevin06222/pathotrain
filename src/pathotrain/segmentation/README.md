@@ -203,7 +203,25 @@ paired by file stem. Tiles of different sizes need `augmentation.crop`.
 - On resume, `max_epochs` may grow: the learning-rate schedule is rebuilt for
   the new length.
 - `load_model("runs/exp01/checkpoints/best.ckpt")` returns the model and its config.
-- With the `fastslide` backend, add `multiprocessing_context: forkserver` to `loader`.
+- Loader workers start with `forkserver` (forking the threaded training process can
+  deadlock them; FastSlide refuses forked workers). `multiprocessing_context: fork`
+  under `loader` starts them faster.
+
+### Evaluation
+
+Score a checkpoint on a held-out split. `best.ckpt` was chosen on `val`, so
+report a `test` split: add one under `data` (as `val`) and pass that config.
+
+```bash
+python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --config config.yaml
+python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split val
+```
+
+- The model, normalisation and task settings come from the checkpoint; `data`,
+  `loader` and `trainer` too, unless `--config` gives them.
+- Prints the metrics as JSON keyed by the split (`test/miou`, `test/iou_<class>`,
+  `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- Scores are per tile: with `tile_overlap`, shared pixels count more than once.
 
 ### Checkpoints
 

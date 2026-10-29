@@ -22,10 +22,12 @@ Sections (``?`` marks optional ones)::
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
     loader?: {...}              # both DataLoaders (batch_size, num_workers, ...);
                                 # pin_memory defaults to true when CUDA is available,
-                                # persistent_workers to true for the training loader
+                                # persistent_workers to true for the training loader,
+                                # multiprocessing_context to forkserver
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
+      test?: {...}              # as val; scored only by the eval command
                                 # or tiles on disk, per split (SegmentationTileFolderDataset):
                                 # {root: dir} from export_segmentation_tiles,
                                 # or {images: dir, masks: dir}
@@ -65,7 +67,7 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     s = cfg["data"][split]
     if "slides" not in s:
         return SegmentationTileFolderDataset(transform=transform, **s)
-    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
+    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val", "test", split)}
     return SegmentationDataset(
         s["slides"],
         s["annotations"],

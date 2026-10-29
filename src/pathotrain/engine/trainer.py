@@ -181,6 +181,15 @@ class Trainer:
             self.task.validation_step(batch)
         return self.task.compute_metrics()
 
+    def evaluate(self, task: Task, loader: DataLoader) -> dict[str, float]:
+        """Score ``task`` over ``loader`` with the trainer's device and precision,
+        without training; use one device for metrics you report (see :meth:`validate`)."""
+        self.fabric.launch()
+        task.to(self.fabric.device)
+        task.model = self.fabric.setup(task.model)
+        self.task = task
+        return self.validate(self.fabric.setup_dataloaders(loader))
+
     def save(self, path: str | Path, weights_only: bool = False, **extra) -> None:
         """Checkpoint ``model`` (a plain state dict), ``epoch``, ``step`` and
         ``extra``; unless ``weights_only``, also the optimizer, scheduler and
