@@ -207,6 +207,22 @@ paired by file stem. Tiles of different sizes need `augmentation.crop`.
   deadlock them; FastSlide refuses forked workers). `multiprocessing_context: fork`
   under `loader` starts them faster.
 
+### Evaluation
+
+Score a checkpoint on a held-out split. `best.ckpt` was chosen on `val`, so
+report a `test` split: add one under `data` (as `val`) and pass that config.
+
+```bash
+python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --config config.yaml
+python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split val
+```
+
+- The model, normalisation and task settings come from the checkpoint; `data`,
+  `loader` and `trainer` too, unless `--config` gives them.
+- Prints the metrics as JSON keyed by the split (`test/miou`, `test/iou_<class>`,
+  `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- Scores are per tile: with `tile_overlap`, shared pixels count more than once.
+
 ### Checkpoints
 
 `ModelCheckpoint(dirpath, monitor="val/miou", mode="max", log_artifact=False, config=None)` writes:

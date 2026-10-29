@@ -1,5 +1,6 @@
-"""Plumbing shared by the config-driven train commands
-(:mod:`pathotrain.segmentation.train`, :mod:`pathotrain.detection.train`)."""
+"""Plumbing shared by the config-driven train and eval commands
+(:mod:`pathotrain.segmentation.train`, :mod:`pathotrain.detection.train` and their
+``eval`` modules)."""
 
 from pathlib import Path
 
@@ -97,16 +98,7 @@ def fit(
         callbacks=callbacks,
         loggers=[mlflow_logger, CSVLogger(out, name="logs")],
     )
-    # Pinned batches let the non-blocking copy to the GPU overlap compute (~2x faster copy).
-    # Fresh workers: forking the threaded training process can deadlock them.
-    loader = {
-        "pin_memory": torch.cuda.is_available(),
-        "multiprocessing_context": "forkserver",
-        **loader_kwargs,
-        **cfg.get("loader", {}),
-    }
-    if not loader.get("num_workers"):  # DataLoader refuses a context without workers
-        loader.pop("multiprocessing_context", None)
+    loader = _loader_kwargs(cfg, loader_kwargs)
     val_loader = None if val_set is None else DataLoader(val_set, **loader)
     return trainer.fit(
         task,
@@ -121,3 +113,34 @@ def fit(
         hparams=flatten(cfg),
         ckpt_path=resume,
     )
+
+
+def evaluate(
+    cfg: dict, task: Task, dataset: Dataset, split: str, **loader_kwargs
+) -> dict[str, float]:
+    """Score ``task`` (holding trained weights) on ``dataset`` and return its metrics
+    keyed ``<split>/...``. Runs on one device, with ``cfg``'s accelerator, precision
+    and ``loader`` section; ``loader_kwargs`` are DataLoader defaults, as for :func:`fit`."""
+    trainer = cfg.get("trainer", {})
+    config = {k: trainer[k] for k in ("accelerator", "precision") if k in trainer}
+    # One device: DDP pads the last batch with repeated tiles (see Trainer.validate).
+    metrics = Trainer(TrainerConfig(**config, devices=1)).evaluate(
+        task, DataLoader(dataset, **_loader_kwargs(cfg, loader_kwargs))
+    )
+    return {f"{split}/{k.removeprefix('val/')}": v for k, v in metrics.items()}
+
+
+def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
+    """DataLoader keyword arguments: pathotrain's defaults, then ``defaults``, then
+    the config's ``loader`` section."""
+    loader = {
+        # Pinned batches let the non-blocking copy to the GPU overlap compute (~2x faster).
+        "pin_memory": torch.cuda.is_available(),
+        # Fresh workers: forking the threaded training process can deadlock them.
+        "multiprocessing_context": "forkserver",
+        **defaults,
+        **cfg.get("loader", {}),
+    }
+    if not loader.get("num_workers"):  # DataLoader refuses a context without workers
+        loader.pop("multiprocessing_context", None)
+    return loader

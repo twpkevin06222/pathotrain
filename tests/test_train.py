@@ -7,6 +7,7 @@ from torch.utils.data import TensorDataset
 
 from pathotrain.segmentation import FocalDiceLoss
 from pathotrain.segmentation import train as train_module
+from pathotrain.segmentation.eval import evaluate
 from pathotrain.segmentation.train import (
     build_dataset,
     build_loss,
@@ -68,6 +69,20 @@ def test_train_from_config_and_rebuild_model_from_checkpoint(tmp_path, monkeypat
     with pytest.raises(FileExistsError):
         train(longer)
     train(longer, resume=tmp_path / "run/checkpoints/last.ckpt")
+
+
+def test_evaluate_reproduces_the_last_validation(tmp_path, monkeypatch, toy_data):
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _cfg(tmp_path / "run")
+    metrics = train(cfg)
+    last = tmp_path / "run/checkpoints/last.ckpt"
+    # Same weights, same tiles: the last epoch's validation, keyed by the split.
+    assert evaluate(last, "val") == pytest.approx(metrics)
+    with pytest.raises(ValueError, match="no 'test' split"):
+        evaluate(last)
+    test = evaluate(last, config={"data": {**cfg["data"], "test": {}}})
+    assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
 
 
 def test_config_helpers_validate():

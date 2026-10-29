@@ -27,6 +27,7 @@ Sections (``?`` marks optional ones)::
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
+      test?: {...}              # as val; scored only by the eval command
                                 # or tiles on disk, per split (SegmentationTileFolderDataset):
                                 # {root: dir} from export_segmentation_tiles,
                                 # or {images: dir, masks: dir}
@@ -66,7 +67,7 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     s = cfg["data"][split]
     if "slides" not in s:
         return SegmentationTileFolderDataset(transform=transform, **s)
-    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
+    data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val", "test", split)}
     return SegmentationDataset(
         s["slides"],
         s["annotations"],

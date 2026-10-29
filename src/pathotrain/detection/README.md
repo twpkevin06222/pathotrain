@@ -112,3 +112,19 @@ data:
   or a COCO folder's categories); a mismatch fails before training.
 - `load_model("runs/det01/checkpoints/best.ckpt")` returns the trained
   `Detector` and its config.
+
+### Evaluation
+
+Score a checkpoint on a held-out split. `best.ckpt` was chosen on `val`, so
+report a `test` split: add one under `data` (as `val`) and pass that config.
+
+```bash
+python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --config config.yaml
+python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --split val
+```
+
+- The model, normalisation and task settings come from the checkpoint; `data`,
+  `loader` and `trainer` too, unless `--config` gives them.
+- Prints the metrics as JSON keyed by the split (`test/map`, `test/ap_<class>`,
+  ...). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- Scores are per tile: tile the split with `tile_overlap: 0` so no object counts twice.
