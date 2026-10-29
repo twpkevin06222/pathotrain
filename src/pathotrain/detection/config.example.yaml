@@ -78,7 +78,10 @@ data:
   min_box_visibility: 0.6   # keep an object cut by the tile edge if this much of its box shows
   min_objects: 1            # keep tiles with at least this many objects; 0 adds empty tiles
   roi_class: null           # e.g. roi: objects outlining the annotated region;
-                            # tiles must then lie wholly inside it
+                            # tiles must then lie wholly inside it, unless roi_fill is set
+  roi_fill: null            # e.g. [255, 255, 255]: tiles need only overlap the region and
+                            # pixels outside it are painted this colour (for regions
+                            # smaller than a tile; lower tiling.tissue_overlap, e.g. 0.01)
   # backend: openslide      # or fastslide (see loader.multiprocessing_context)
   # Per split: lists of slide and GeoJSON directories, matched by file stem.
   # Tile sides (or augmentation.crop) must be divisible by 32 for RF-DETR.

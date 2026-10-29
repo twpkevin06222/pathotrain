@@ -145,6 +145,7 @@ from pathotrain.detection import collate
 kwargs = dict(
     class_map={"class01": 0, "class02": 1},  # labels 0 .. num_classes - 1
     roi_class="roi",
+    roi_fill=(255, 255, 255),  # paint outside the ROI instead of skipping tiles that cross it
     min_box_visibility=0.6,  # keep an object cut by the tile edge if 60% of its box shows
     min_objects=1,           # keep tiles with at least one object (0 adds empty tiles)
     tiling=TilingConfig(tile_size=512, tile_mpp=0.5),
