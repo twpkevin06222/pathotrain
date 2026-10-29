@@ -22,7 +22,8 @@ Sections (``?`` marks optional ones)::
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
     loader?: {...}              # both DataLoaders (batch_size, num_workers, ...);
                                 # pin_memory defaults to true when CUDA is available,
-                                # persistent_workers to true for the training loader
+                                # persistent_workers to true for the training loader,
+                                # multiprocessing_context to forkserver
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}

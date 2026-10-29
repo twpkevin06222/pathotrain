@@ -98,7 +98,13 @@ def fit(
         loggers=[mlflow_logger, CSVLogger(out, name="logs")],
     )
     # Pinned batches let the non-blocking copy to the GPU overlap compute (~2x faster copy).
-    loader = {"pin_memory": torch.cuda.is_available(), **loader_kwargs, **cfg.get("loader", {})}
+    # Fresh workers: forking the threaded training process can deadlock them.
+    loader = {
+        "pin_memory": torch.cuda.is_available(),
+        "multiprocessing_context": "forkserver",
+        **loader_kwargs,
+        **cfg.get("loader", {}),
+    }
     if not loader.get("num_workers"):  # DataLoader refuses a context without workers
         loader.pop("multiprocessing_context", None)
     val_loader = None if val_set is None else DataLoader(val_set, **loader)

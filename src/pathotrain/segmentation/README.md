@@ -203,7 +203,9 @@ paired by file stem. Tiles of different sizes need `augmentation.crop`.
 - On resume, `max_epochs` may grow: the learning-rate schedule is rebuilt for
   the new length.
 - `load_model("runs/exp01/checkpoints/best.ckpt")` returns the model and its config.
-- With the `fastslide` backend, add `multiprocessing_context: forkserver` to `loader`.
+- Loader workers start with `forkserver` (forking the threaded training process can
+  deadlock them; FastSlide refuses forked workers). `multiprocessing_context: fork`
+  under `loader` starts them faster.
 
 ### Checkpoints
 
