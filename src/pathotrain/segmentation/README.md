@@ -193,8 +193,8 @@ data:
   val: {slides: [data/val/slides], annotations: [data/val/geojson], tiling: {tile_size: 512, tile_mpp: 0.5}}
 ```
 
-A split can read tiles already on disk instead of slides (`TileFolderDataset`):
-`{root: tiles/train}` from `export_tiles`, or `{images: bcss/images, masks: bcss/masks}`
+A split can read tiles already on disk instead of slides (`SegmentationTileFolderDataset`):
+`{root: tiles/train}` from `export_segmentation_tiles`, or `{images: bcss/images, masks: bcss/masks}`
 paired by file stem. Tiles of different sizes need `augmentation.crop`.
 
 - The config is copied to `output_dir/config.yaml`, uploaded to the MLflow run,

@@ -1,9 +1,10 @@
-"""Augmentation and preprocessing for segmentation tiles, built on torchvision v2.
+"""Augmentation and preprocessing for segmentation and detection tiles, built on torchvision v2.
 
 :func:`train_transform` and :func:`eval_transform` return a ``transform(tile, mask)``
 for :class:`~pathotrain.dataloader.SegmentationDataset` and
-:class:`~pathotrain.dataloader.TileFolderDataset`. Both end in the same
-normalisation, so the splits never drift apart::
+:class:`~pathotrain.dataloader.SegmentationTileFolderDataset`, or with ``boxes=True`` a
+``transform(tile, target)`` for :class:`~pathotrain.dataloader.DetectionDataset`.
+Both end in the same normalisation, so the splits never drift apart::
 
     train = SegmentationDataset(slides, annotations, transform=train_transform(), **kwargs)
     val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(), **kwargs)
@@ -19,6 +20,8 @@ Tiles and masks travel as ``tv_tensors.Image`` and ``tv_tensors.Mask``, so
 geometric operations move the mask with the tile (nearest neighbour, so labels
 stay intact) and colour operations leave it alone. Uncovered mask pixels are
 ``mask_fill`` (255), so train with ``CrossEntropyLoss(ignore_index=255)``.
+Detection boxes travel as ``tv_tensors.BoundingBoxes`` and move the same way;
+rotation and shear grow a box to enclose its rotated corners.
 Randomness comes from torch's generator, which a ``DataLoader`` seeds per worker.
 """
 
@@ -196,12 +199,15 @@ class RandomJPEG(_ImageOnly):
 
 
 class RandomRot90(v2.Transform):
-    """Rotate image and mask together by a random multiple of 90 degrees."""
+    """Rotate image, mask and boxes together by a random multiple of 90 degrees."""
 
     def make_params(self, flat_inputs: list[Any]) -> dict[str, Any]:
         return {"k": int(torch.randint(4, ()))}
 
     def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+        if isinstance(inpt, tv_tensors.BoundingBoxes):
+            # Same turn as torch.rot90 below; expand swaps the canvas of a non-square tile.
+            return F.rotate(inpt, 90 * params["k"], expand=True)
         return tv_tensors.wrap(torch.rot90(inpt, params["k"], dims=(-2, -1)), like=inpt)
 
 
@@ -294,6 +300,50 @@ class SegmentationTransform:
         return image.as_subclass(torch.Tensor), mask.as_subclass(torch.Tensor)
 
 
+class DetectionTransform:
+    """``transform(tile, target)`` running ``transforms``, then normalisation and tensor conversion.
+
+    Takes the ``(H, W, 3)`` uint8 tile and ``{"boxes": (N, 4) [x, y, w, h], "labels": (N,)}``
+    target of :class:`patchology.DetectionTileGenerator` (COCO boxes in tile pixels).
+    Returns a ``(3, H, W)`` float32 image tensor and ``{"boxes": (N, 4) float32
+    [x1, y1, x2, y2], "labels": (N,) int64}``, as :class:`~pathotrain.detection.DetectionTask`
+    takes. Boxes are clipped to the tile and those left under 1 px dropped.
+    """
+
+    def __init__(
+        self,
+        transforms: Sequence[v2.Transform] = (),
+        mean: Sequence[float] = IMAGENET_MEAN,
+        std: Sequence[float] = IMAGENET_STD,
+    ) -> None:
+        self.compose = v2.Compose(
+            [
+                *transforms,
+                v2.ConvertBoundingBoxFormat("XYXY"),
+                v2.ClampBoundingBoxes(),
+                v2.SanitizeBoundingBoxes(),
+                v2.ToDtype({tv_tensors.Image: torch.float32, "others": None}, scale=True),
+                v2.Normalize(mean=list(mean), std=list(std)),
+            ]
+        )
+
+    def __call__(
+        self, tile: np.ndarray, target: dict[str, np.ndarray]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        image = tv_tensors.Image(torch.tensor(tile).permute(2, 0, 1))
+        boxes = tv_tensors.BoundingBoxes(
+            torch.tensor(target["boxes"], dtype=torch.float32).reshape(-1, 4),
+            format="XYWH",
+            canvas_size=tile.shape[:2],
+        )
+        labels = torch.tensor(target["labels"], dtype=torch.int64).reshape(-1)
+        image, out = self.compose(image, {"boxes": boxes, "labels": labels})
+        return image.as_subclass(torch.Tensor), {
+            "boxes": out["boxes"].as_subclass(torch.Tensor),
+            "labels": out["labels"],
+        }
+
+
 def train_transform(
     n: int = 3,
     m: float = 5,
@@ -305,7 +355,8 @@ def train_transform(
     blur: float = 0.0,
     noise: float = 0.0,
     jpeg: float = 0.0,
-) -> SegmentationTransform:
+    boxes: bool = False,
+) -> SegmentationTransform | DetectionTransform:
     """Random crop (if ``crop``), flips and 90 degree rotations, H&E RandAugment,
     optional scanner artifacts, normalisation.
 
@@ -320,6 +371,9 @@ def train_transform(
             Gaussian noise (:data:`NOISE_SIGMA`) and JPEG compression (quality in
             :data:`JPEG_QUALITY`), applied in that order, as a scanner would; 0 (the
             default) turns each off. They change the tile only, never the mask.
+        boxes: Detection targets instead of masks (a :class:`DetectionTransform`).
+            A crop clips the boxes it cuts; ``min_box_visibility`` is not applied
+            again, so tile at the training size rather than cropping where you can.
     """
     transforms = [v2.RandomCrop(crop)] if crop else []
     transforms += [v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), RandomRot90()]
@@ -335,13 +389,16 @@ def train_transform(
             raise ValueError(f"blur, noise and jpeg are probabilities in [0, 1], got {p}")
         if p:
             transforms.append(v2.RandomApply([t], p=p))
-    return SegmentationTransform(transforms, mean, std)
+    return (DetectionTransform if boxes else SegmentationTransform)(transforms, mean, std)
 
 
 def eval_transform(
     crop: int | None = None,
     mean: Sequence[float] = IMAGENET_MEAN,
     std: Sequence[float] = IMAGENET_STD,
-) -> SegmentationTransform:
-    """Deterministic preprocessing: centre crop (if ``crop``) and the same normalisation as training."""
-    return SegmentationTransform([v2.CenterCrop(crop)] if crop else [], mean, std)
+    boxes: bool = False,
+) -> SegmentationTransform | DetectionTransform:
+    """Deterministic preprocessing: centre crop (if ``crop``) and the same normalisation as
+    training. ``boxes`` as for :func:`train_transform`."""
+    cls = DetectionTransform if boxes else SegmentationTransform
+    return cls([v2.CenterCrop(crop)] if crop else [], mean, std)

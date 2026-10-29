@@ -51,7 +51,7 @@ def test_fit_logs_detection_metrics_and_checkpoints(tmp_path):
     trainer = Trainer(TrainerConfig(max_epochs=2, grad_clip=0.1, **CPU), callbacks=[checkpoint])
     metrics = trainer.fit(_task(), loader, loader)
 
-    assert {"val/map", "val/map_50", "val/map_75", "val/mar_100", "val/loss"} <= metrics.keys()
+    assert {"val/map", "val/map_50", "val/map_75", "val/mar_300", "val/loss"} <= metrics.keys()
     assert {"val/ap_small", "val/ap_large"} <= metrics.keys()
     assert math.isfinite(metrics["val/loss"]) and 0 <= metrics["val/map"] <= 1
     assert (tmp_path / "best.ckpt").exists() and (tmp_path / "last.ckpt").exists()
@@ -76,3 +76,47 @@ def test_build_detector_rejects_unknown_names_and_settings():
         build_detector("rfdetr:huge", 2, pretrained=False)
     with pytest.raises(ValueError, match="unknown RF-DETR settings"):
         build_detector("rfdetr:nano", 2, pretrained=False, not_a_setting=1)
+
+
+def test_map_at_300_detections_matches_coco_at_100_when_under_100():
+    # With at most 100 predictions per image the 100 and 300 caps agree, so the
+    # precision-table AP must equal pycocotools' own summary (stock torchmetrics).
+    from torchmetrics.detection import MeanAveragePrecision
+
+    task = _task()
+    stock = MeanAveragePrecision(box_format="xyxy", iou_type="bbox", class_metrics=True)
+    gen = torch.Generator().manual_seed(0)
+    for _ in range(6):
+        xy = torch.rand(8, 2, generator=gen) * 100
+        target = {
+            "boxes": torch.cat([xy, xy + 20], 1),
+            "labels": torch.randint(0, 2, (8,), generator=gen),
+        }
+        noisy = target["boxes"] + torch.randn(8, 4, generator=gen) * 3
+        extra = torch.cat([xy, xy + 15], 1)[:4] + 40
+        pred = {
+            "boxes": torch.cat([noisy, extra]),
+            "scores": torch.rand(12, generator=gen),
+            "labels": torch.cat([target["labels"], torch.randint(0, 2, (4,), generator=gen)]),
+        }
+        task.map.update([pred], [target])
+        stock.update([pred], [target])
+    task.val_loss.update(torch.tensor(1.0))
+    ours, ref = task.compute_metrics(), stock.compute()
+    for key in ("map", "map_50", "map_75"):
+        assert ours[f"val/{key}"] == pytest.approx(ref[key].item())
+    assert ours["val/ap_small"] == pytest.approx(ref["map_per_class"][0].item())
+    assert ours["val/ap_large"] == pytest.approx(ref["map_per_class"][1].item())
+    assert ours["val/mar_300"] == pytest.approx(ref["mar_100"].item())
+
+
+def test_map_counts_up_to_300_detections_per_image():
+    # 150 objects found perfectly: a 100 cap would miss a third of them.
+    task = _task()
+    xy = torch.arange(150.0)[:, None].repeat(1, 2) * 30
+    target = {"boxes": torch.cat([xy, xy + 20], 1), "labels": torch.zeros(150, dtype=torch.long)}
+    pred = {**target, "scores": torch.linspace(1, 0.1, 150)}
+    task.map.update([pred], [target])
+    task.val_loss.update(torch.tensor(1.0))
+    metrics = task.compute_metrics()
+    assert metrics["val/map"] == pytest.approx(1.0) and metrics["val/mar_300"] == pytest.approx(1.0)

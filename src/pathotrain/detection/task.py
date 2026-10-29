@@ -9,11 +9,19 @@ from torchmetrics import MeanMetric
 from torchmetrics.detection import MeanAveragePrecision
 from torchvision.ops import box_convert
 
+from pathotrain.detection.models import Detector
 from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.task import Task
-from pathotrain.detection.models import Detector
 
 Targets = list[dict[str, Tensor]]
+
+MAX_DETECTIONS = 300  # per image, for mAP; RF-DETR's num_select
+
+
+def _mean_ap(precision: Tensor) -> float:
+    """Mean of a COCOeval precision slice, skipping -1 (no ground truth); NaN if all are."""
+    valid = precision[precision > -1]
+    return valid.mean().item() if valid.numel() else float("nan")
 
 
 def _clean(targets: Targets) -> Targets:
@@ -42,7 +50,7 @@ class DetectionTask(Task):
 
     Logs ``train/loss`` and its classification, L1 and GIoU parts, and per
     epoch ``val/loss``, COCO ``val/map`` (IoU 0.5:0.95), ``val/map_50``,
-    ``val/map_75``, ``val/mar_100`` and ``val/ap_<class>``. Pass
+    ``val/map_75``, ``val/mar_300`` and ``val/ap_<class>``. Pass
     ``monitor="val/map"`` to ``ModelCheckpoint`` and ``EarlyStopping``.
 
     The optimizer follows RF-DETR's recipe: AdamW with ``lr`` for the heads,
@@ -75,7 +83,15 @@ class DetectionTask(Task):
         self.class_names = class_names or [str(i) for i in range(self.num_classes)]
         if len(self.class_names) != self.num_classes:
             raise ValueError(f"{len(self.class_names)} class names for {self.num_classes} classes")
-        self.map = MeanAveragePrecision(box_format="xyxy", iou_type="bbox", class_metrics=True)
+        # RF-DETR keeps 300 predictions per image; COCO's default 100 would drop some on
+        # dense tiles (many cells). pycocotools' summary hardcodes 100 for AP, so AP is
+        # computed in compute_metrics from the raw precision table (extended_summary).
+        self.map = MeanAveragePrecision(
+            box_format="xyxy",
+            iou_type="bbox",
+            max_detection_thresholds=[1, 10, MAX_DETECTIONS],
+            extended_summary=True,
+        )
         self.val_loss = MeanMetric()
 
     def _loss(self, outputs: dict, images: Tensor, targets: Targets) -> tuple[Tensor, dict]:
@@ -116,12 +132,18 @@ class DetectionTask(Task):
     def compute_metrics(self) -> dict[str, float]:
         result = self.map.compute()
         self.map.reset()
-        metrics = {f"val/{k}": result[k].item() for k in ("map", "map_50", "map_75", "mar_100")}
-        # A class absent from targets has AP -1 in torchmetrics; report it as NaN.
-        classes = result["classes"].reshape(-1).tolist()
-        for c, ap in zip(classes, result["map_per_class"].reshape(-1).tolist(), strict=True):
+        # (IoU 0.5:0.05:0.95, recall, class, area "all", the last max-detections setting)
+        precision = result["precision"][:, :, :, 0, -1]
+        metrics = {
+            "val/map": _mean_ap(precision),
+            "val/map_50": _mean_ap(precision[0]),
+            "val/map_75": _mean_ap(precision[5]),
+            f"val/mar_{MAX_DETECTIONS}": result[f"mar_{MAX_DETECTIONS}"].item(),
+        }
+        # A class absent from targets has no valid precision: NaN.
+        for k, c in enumerate(result["classes"].reshape(-1).tolist()):
             if 0 <= c < self.num_classes:
-                metrics[f"val/ap_{self.class_names[c]}"] = ap if ap >= 0 else float("nan")
+                metrics[f"val/ap_{self.class_names[c]}"] = _mean_ap(precision[:, :, k])
         metrics["val/loss"] = self.val_loss.compute().item()
         self.val_loss.reset()
         return metrics

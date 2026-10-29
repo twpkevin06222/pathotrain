@@ -26,8 +26,9 @@ Sections (``?`` marks optional ones)::
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
       val?: {slides: [...], annotations: [...], tiling: {...}}
-                                # or tiles on disk, per split (TileFolderDataset):
-                                # {root: dir} from export_tiles, or {images: dir, masks: dir}
+                                # or tiles on disk, per split (SegmentationTileFolderDataset):
+                                # {root: dir} from export_segmentation_tiles,
+                                # or {images: dir, masks: dir}
       ...                       # the rest goes to SegmentationTileGenerator for the
                                 # slide splits (class_map, roi_class, backend, ...)
 """
@@ -36,65 +37,15 @@ import argparse
 from pathlib import Path
 
 import torch
-from lightning_fabric import seed_everything
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
 from patchology import TilingConfig
-from pathotrain import segmentation
-from pathotrain.dataloader import SegmentationDataset, TileFolderDataset
-from pathotrain.dataloader.augmentation import (
-    IMAGENET_MEAN,
-    IMAGENET_STD,
-    eval_transform,
-    train_transform,
-)
-from pathotrain.engine import (
-    CSVLogger,
-    EarlyStopping,
-    MLflowLogger,
-    ModelCheckpoint,
-    Trainer,
-    TrainerConfig,
-    dump_config,
-    flatten,
-    load_config,
-)
-from pathotrain.pathofm import MIDNIGHT_MEAN, MIDNIGHT_STD
-
-NORMALISATION = {
-    "IMAGENET_MEAN": IMAGENET_MEAN,
-    "IMAGENET_STD": IMAGENET_STD,
-    "MIDNIGHT_MEAN": MIDNIGHT_MEAN,
-    "MIDNIGHT_STD": MIDNIGHT_STD,
-}
-
-
-def normalisation(cfg: dict, key: str) -> tuple[float, float, float]:
-    """``cfg[key]`` ("mean" or "std") as an RGB triple in [0, 1] units.
-
-    A string must be ``IMAGENET_<KEY>`` or ``MIDNIGHT_<KEY>``; anything else
-    must be a list or tuple of 3 numbers (custom statistics).
-    """
-    value = cfg.get(key)
-    if isinstance(value, str):
-        allowed = [f"IMAGENET_{key.upper()}", f"MIDNIGHT_{key.upper()}"]
-        if value not in allowed:
-            raise ValueError(f"{key} must be one of {allowed} or 3 numbers, got {value!r}")
-        return NORMALISATION[value]
-    if not (
-        isinstance(value, (list, tuple))
-        and len(value) == 3
-        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
-    ):
-        raise ValueError(f"{key} must be a preset name or 3 numbers, got {value!r}")
-    value = tuple(float(v) for v in value)
-    # Tiles are scaled to [0, 1] before Normalize, so 0-255 statistics are a mistake.
-    if key == "mean" and not all(0 <= v <= 1 for v in value):
-        raise ValueError(f"mean must be in [0, 1] units, got {value}")
-    if key == "std" and not all(0 < v <= 1 for v in value):
-        raise ValueError(f"std must be in (0, 1] units, got {value}")
-    return value
+from pathotrain import experiment, segmentation
+from pathotrain.dataloader import SegmentationDataset, SegmentationTileFolderDataset
+from pathotrain.dataloader.augmentation import eval_transform, train_transform
+from pathotrain.engine import load_config
+from pathotrain.experiment import normalisation
 
 
 def build_loss(cfg: dict) -> nn.Module | None:
@@ -110,10 +61,10 @@ def build_loss(cfg: dict) -> nn.Module | None:
 
 def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     """``data[split]`` as a dataset: slides with annotations, tiled on the fly, or
-    tiles on disk (``root`` from ``export_tiles``, or ``images`` and ``masks``)."""
+    tiles on disk (``root`` from ``export_segmentation_tiles``, or ``images`` and ``masks``)."""
     s = cfg["data"][split]
     if "slides" not in s:
-        return TileFolderDataset(transform=transform, **s)
+        return SegmentationTileFolderDataset(transform=transform, **s)
     data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val")}
     return SegmentationDataset(
         s["slides"],
@@ -127,49 +78,19 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
-    out = Path(cfg["output_dir"])
-    # A resumed run may change the config (e.g. more epochs); record the new one.
-    config_path = dump_config(cfg, out, overwrite=resume is not None)
-    seed_everything(cfg["seed"], workers=True)
-
+    config_path = experiment.start(cfg, resume)
     model = segmentation.build_model(**cfg["model"])
     task = segmentation.SegmentationTask(
         model, cfg["model"]["num_classes"], loss=build_loss(cfg), **cfg.get("task", {})
     )
-    callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **cfg.get("checkpoint", {}))]
-    if "early_stopping" in cfg:
-        callbacks.append(EarlyStopping(**cfg["early_stopping"]))
-    mlflow_logger = MLflowLogger(experiment=cfg["name"])
-    mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
-    trainer = Trainer(
-        TrainerConfig(**cfg.get("trainer", {})),
-        callbacks=callbacks,
-        loggers=[mlflow_logger, CSVLogger(out, name="logs")],
-    )
-
     augmentation = cfg.get("augmentation", {})
-    # Pinned batches let the non-blocking copy to the GPU overlap compute (~2x faster copy).
-    loader = {"pin_memory": torch.cuda.is_available(), **cfg.get("loader", {})}
     train_set = build_dataset(cfg, "train", train_transform(mean=mean, std=std, **augmentation))
-    val_loader = None
+    val_set = None
     if "val" in cfg["data"]:
         val_set = build_dataset(
             cfg, "val", eval_transform(augmentation.get("crop"), mean=mean, std=std)
         )
-        val_loader = DataLoader(val_set, **loader)
-    return trainer.fit(
-        task,
-        # Training workers persist (no per-epoch restart); val ones don't, so the two sets
-        # are not both held in RAM for the whole run.
-        DataLoader(
-            train_set,
-            shuffle=True,
-            **{"persistent_workers": loader.get("num_workers", 0) > 0, **loader},
-        ),
-        val_loader,
-        hparams=flatten(cfg),
-        ckpt_path=resume,
-    )
+    return experiment.fit(cfg, task, train_set, val_set, config_path, resume)
 
 
 def load_model(path: str | Path, map_location: str = "cpu") -> tuple[nn.Module, dict]:

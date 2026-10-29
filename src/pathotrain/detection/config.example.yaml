@@ -1,0 +1,97 @@
+# Experiment config for `python -m pathotrain.detection.train config.yaml`.
+# Copy it, set the paths under `data`, and change what you need. Values shown are
+# the defaults unless marked "example"; sections marked optional can be deleted.
+
+name: det01                 # MLflow experiment name
+seed: 0
+output_dir: runs/det01      # config.yaml, checkpoints/ and logs/; one per experiment
+# Input normalisation: RF-DETR's DINOv2 backbone was trained on ImageNet statistics.
+mean: IMAGENET_MEAN
+std: IMAGENET_STD
+
+# build_detector(**model): rfdetr:nano (384 px), small (512), medium (576), large (704).
+# Other keys are rfdetr ModelConfig fields or loss settings (cls_loss_coef, ...).
+model:
+  name: rfdetr:nano
+  num_classes: 2            # example; must match the labels in data.class_map
+  pretrained: true          # COCO weights, downloaded once to weights_dir
+  # weights_dir: ~/.cache/rfdetr
+
+# Optional; DetectionTask. RF-DETR's AdamW recipe, linear warmup, then cosine decay to 0.
+task:
+  lr: 1.0e-4                # heads; the decoder gets lr * lr_component_decay
+  lr_encoder: 1.5e-4        # backbone, decayed per layer towards the input
+  lr_vit_layer_decay: 0.8
+  lr_component_decay: 0.7
+  weight_decay: 1.0e-4
+  warmup_epochs: 0          # e.g. 1; fractions work
+  class_names: [class01, class02]  # example; AP keys val/ap_<name>, by label
+
+# Optional; TrainerConfig.
+trainer:
+  max_epochs: 50
+  precision: bf16-mixed     # or 16-mixed, 32-true
+  accelerator: auto
+  strategy: auto            # e.g. ddp for several GPUs
+  devices: auto
+  accumulate: 1             # batches per optimizer step
+  grad_clip: 0.1            # max gradient norm (RF-DETR's); null turns it off
+  log_interval: epoch       # or step (train loss every log_every steps)
+  log_every: 50
+
+# Optional; ModelCheckpoint keeps best.ckpt (by monitor) and last.ckpt.
+checkpoint:
+  monitor: val/map          # COCO mAP@0.5:0.95; or val/map_50, val/ap_<class>, val/loss (mode: min)
+  mode: max
+  log_artifact: false       # true uploads best.ckpt to MLflow
+
+# Optional; delete to train all max_epochs.
+early_stopping:
+  monitor: val/map
+  mode: max
+  patience: 10
+
+# Optional; train_transform(boxes=True). Boxes move with flips, 90 degree turns and
+# RandAugment's translate, shear and rotate. Validation uses the same crop and normalisation.
+augmentation:
+  n: 3                      # H&E RandAugment ops per tile; 0 turns it off
+  m: 5                      # their magnitude
+  crop: null                # random crop size; prefer tiling at the training size
+  blur: 0.0                 # probability of scanner-like blur, noise, JPEG
+  noise: 0.0
+  jpeg: 0.0
+
+# Optional; keyword arguments for both DataLoaders (collate_fn is set for you).
+loader:
+  batch_size: 8
+  num_workers: 8
+  # pin_memory: true        # default when a CUDA GPU is present; false turns it off
+  # multiprocessing_context: forkserver  # needed with backend: fastslide
+  # persistent_workers: true  # default for the training loader (num_workers > 0);
+  #                           # setting it here applies to the val loader too
+
+data:
+  # Plain-value DetectionTileGenerator options, shared by both splits.
+  class_map:                # example; annotation class name -> label 0 .. num_classes - 1
+    class01: 0
+    class02: 1
+  min_box_visibility: 0.6   # keep an object cut by the tile edge if this much of its box shows
+  min_objects: 1            # keep tiles with at least this many objects; 0 adds empty tiles
+  roi_class: null           # e.g. roi: objects outlining the annotated region;
+                            # tiles must then lie wholly inside it, unless roi_fill is set
+  roi_fill: null            # e.g. [255, 255, 255]: tiles need only overlap the region and
+                            # pixels outside it are painted this colour (for regions
+                            # smaller than a tile; lower tiling.tissue_overlap, e.g. 0.01)
+  # backend: openslide      # or fastslide (see loader.multiprocessing_context)
+  # Per split: lists of slide and GeoJSON directories, matched by file stem.
+  # Tile sides (or augmentation.crop) must be divisible by 32 for RF-DETR.
+  train:
+    slides: [data/train/slides]            # example paths
+    annotations: [data/train/annotations]
+    tiling: {tile_size: 384, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
+  val:                      # optional; without it there is no validation or best.ckpt
+    slides: [data/val/slides]
+    annotations: [data/val/annotations]
+    tiling: {tile_size: 384, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
+  # Or a COCO folder per split (the options above then do not apply):
+  #   train: {root: tiles/train}            # written by export_detection_tiles
