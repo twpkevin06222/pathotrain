@@ -1,0 +1,66 @@
+# Experiment config for `python -m pathotrain.pathotrain.pathogen.train config.yaml`.
+# Copy it, set the paths under `data`, and change what you need. Values shown are
+# the defaults unless marked "example"; sections marked optional can be deleted.
+
+name: ldm01                 # MLflow experiment name
+seed: 0
+output_dir: runs/ldm01      # config.yaml, checkpoints/ and logs/; one per experiment
+
+# Latent diffusion: frozen VAE, UNet trained from scratch on [noisy target, source] latents.
+model:
+  name: ldm
+  vae: stabilityai/sd-vae-ft-mse  # Hub id or local path; latents are 1/8 of the tile side
+  unet:                     # UNet2DModel arguments
+    block_out_channels: [128, 256, 512, 512]  # self-attention on the last two levels
+    layers_per_block: 2
+
+# Optional; LatentDiffusionTask. AdamW, linear warmup, then cosine decay to 0.
+task:
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_epochs: 0          # e.g. 1; fractions work
+  prediction_type: v_prediction  # or epsilon
+  num_train_timesteps: 1000
+  sample_steps: 50          # DDIM steps for validation samples (and translate's default)
+  sample_batches: 2         # val batches sampled for val/psnr and val/ssim; 0 skips
+                            # (then monitor val/loss with mode: min)
+  seed: 0                   # fixed validation noise
+
+# Optional; TrainerConfig.
+trainer:
+  max_epochs: 100
+  precision: bf16-mixed     # the UNet; the frozen VAE runs in fp32
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  accumulate: 1
+  grad_clip: 1.0
+  log_interval: epoch       # or step (train loss every log_every steps)
+  log_every: 50
+
+# Optional; ModelCheckpoint keeps best.ckpt (by monitor) and last.ckpt (UNet weights).
+checkpoint:
+  monitor: val/ssim         # or val/psnr, val/loss (mode: min)
+  mode: max
+
+# Optional; delete to train all max_epochs.
+early_stopping:
+  monitor: val/ssim
+  mode: max
+  patience: 20
+
+# Optional; keyword arguments for both DataLoaders.
+loader:
+  batch_size: 8
+  num_workers: 8
+
+data:
+  crop: 512                 # random crop (train), centre crop (val), same place in both tiles
+  resize: null              # e.g. 512: shrink the shorter side first (a larger field of view)
+  # Per split: lists of source and target directories; tiles pair by file stem.
+  train:
+    source: [data/HE/train]   # example paths
+    target: [data/IHC/train]
+  val:                      # optional; without it there is no validation or best.ckpt
+    source: [data/HE/val]
+    target: [data/IHC/val]
