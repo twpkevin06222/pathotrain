@@ -35,6 +35,9 @@ export = [
     "onnx>=1.23.2",
     "onnxruntime>=1.31.1",
 ]
+pathogen = [
+    "diffusers>=0.42.1",
+]
 
 [build-system]
 requires = ["hatchling"]
