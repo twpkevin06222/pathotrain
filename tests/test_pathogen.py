@@ -313,3 +313,27 @@ def test_cache_toggle_builds_once_per_fingerprint(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="resize"):
         build_dataset({**cfg, "data": {**cfg["data"], "resize": 32}}, "train")
     assert isinstance(build_dataset(cfg, "val"), PairedTileDataset)  # val reads images
+
+
+def test_evaluate_samples_every_tile_of_a_split(tmp_path, monkeypatch):
+    from pathotrain.pathogen.eval import evaluate
+
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _sit_cfg(tmp_path, repa=False)
+    cfg["task"]["sample_batches"] = 2  # 6 val tiles at batch 4: validation samples them all
+    metrics = train(cfg)
+    last = tmp_path / "run/checkpoints/last.ckpt"
+
+    def score(*args, **kwargs):
+        torch.manual_seed(0)  # the tiny VAE's random weights, as train built them (seed 0)
+        return evaluate(last, *args, **kwargs)
+
+    # Same EMA weights, tiles and noise: the last validation, keyed by the split.
+    assert score("val") == pytest.approx(metrics)
+    with pytest.raises(ValueError, match="no 'test' split"):
+        score()
+    test = score(config={"data": {**cfg["data"], "test": cfg["data"]["val"]}})
+    assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
+    fewer = score("val", steps=1)
+    assert fewer["val/loss"] == pytest.approx(metrics["val/loss"])  # loss does not sample
