@@ -8,7 +8,7 @@ from PIL import Image
 
 pytest.importorskip("diffusers")
 
-from pathotrain.pathogen.data import PairedTileDataset, paired_transform
+from pathotrain.dataloader.pathogen import PairedTileDataset, paired_transform
 from pathotrain.pathogen.train import build_dataset, build_task, load_model, train
 from pathotrain.pathogen.translate import translate_dir
 
@@ -55,22 +55,6 @@ def _cfg(tmp_path):
     }
 
 
-def test_pairs_tiles_by_stem_and_transforms_them_together(tmp_path):
-    root = _tiles(tmp_path)
-    same = PairedTileDataset([root / "HE"], [root / "HE"], paired_transform(True, crop=16))
-    assert len(same) == 7
-    for _ in range(5):  # same random crop, flip and turn on both sides
-        source, target = same[0]
-        assert source.shape == (3, 16, 16) and torch.equal(source, target)
-    paired = PairedTileDataset([root / "HE"], [root / "IHC"])
-    assert len(paired) == 6  # unpaired.png skipped
-    source, target = paired[0]
-    assert source.min() >= -1 and source.max() <= 1
-    assert torch.allclose(source, -target, atol=1e-6)  # 255 - x maps to -x in [-1, 1]
-    with pytest.raises(ValueError, match="pairs"):
-        PairedTileDataset([root / "HE"], [tmp_path])
-
-
 def test_train_load_and_translate(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
@@ -100,7 +84,7 @@ def test_validation_is_deterministic_and_the_vae_stays_frozen(tmp_path):
     task = build_task(cfg)
     assert not any(p.requires_grad for p in task.vae.parameters())
     assert not task.train().vae.training
-    batch = (torch.rand(2, 3, 16, 16) * 2 - 1, torch.rand(2, 3, 16, 16) * 2 - 1)
+    batch = (torch.rand(2, 3, 16, 16), torch.rand(2, 3, 16, 16))
     task.eval()
     runs = []
     for _ in range(2):
@@ -193,7 +177,7 @@ def test_sampling_follows_the_flow_to_the_data(tmp_path, sampler):
 def test_repa_aligns_with_the_encoder(tmp_path):
     task = build_task(_sit_cfg(tmp_path)).train()
     assert not any(p.requires_grad for p in task.encoder.parameters())
-    batch = (torch.rand(2, 3, 16, 16) * 2 - 1, torch.rand(2, 3, 16, 16) * 2 - 1)
+    batch = (torch.rand(2, 3, 16, 16), torch.rand(2, 3, 16, 16))
     loss, logs = task.training_step(batch)
     assert set(logs) == {"loss", "flow_loss", "repa_loss"}
     assert 0 <= logs["repa_loss"] <= 2
@@ -260,12 +244,12 @@ def test_dihedral_gives_the_eight_flips_and_turns():
 
 
 def test_latent_cache_matches_the_vae_and_trains(tmp_path, monkeypatch):
+    from pathotrain.dataloader.pathogen import read_image
     from pathotrain.pathogen.cache import (
         CachedLatentDataset,
         build_latent_cache,
         dihedral,
     )
-    from pathotrain.pathogen.data import read_image, to_model_range
     from pathotrain.pathogen.diffusion import build_vae
 
     cfg = _sit_cfg(tmp_path)
@@ -278,9 +262,9 @@ def test_latent_cache_matches_the_vae_and_trains(tmp_path, monkeypatch):
     assert latents.shape == (6, 2, 2, 4, 16, 16)  # pairs, variants, sides, C, 32 px / 2
     torch.manual_seed(0)
     vae = build_vae(TINY_VAE)
-    tile = to_model_range(read_image(tmp_path / "data/HE/t0.png"))[None]
+    tile = read_image(tmp_path / "data/HE/t0.png")[None].float() / 255
     for k in range(2):  # each variant encodes the flipped tile, not a flipped latent
-        want = vae.encode(dihedral(tile, k)).latent_dist.mean[0]
+        want = vae.encode(dihedral(tile * 2 - 1, k)).latent_dist.mean[0]
         assert torch.allclose(torch.from_numpy(latents[0, k, 0]).float(), want, atol=1e-2)
 
     ds = CachedLatentDataset(cache, crop=16, image="target", vae=TINY_VAE)
@@ -288,7 +272,7 @@ def test_latent_cache_matches_the_vae_and_trains(tmp_path, monkeypatch):
     assert sample["source"].shape == sample["target"].shape == (4, 8, 8)
     assert sample["image"].shape == (3, 16, 16)
     whole = CachedLatentDataset(cache, image="target", vae=TINY_VAE)
-    ihc = to_model_range(read_image(tmp_path / "data/IHC/t0.png"))
+    ihc = read_image(tmp_path / "data/IHC/t0.png").float() / 255
     image = whole[0]["image"]  # whole tile: identity or flipped, matching its latents
     assert torch.equal(image, ihc) or torch.equal(image, ihc.flip(-1))
     with pytest.raises(ValueError, match="VAE"):

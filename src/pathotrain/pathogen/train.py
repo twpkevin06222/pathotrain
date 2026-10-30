@@ -36,9 +36,9 @@ import torch
 from torch.utils.data import Dataset
 
 from pathotrain import experiment
+from pathotrain.dataloader.pathogen import PairedTileDataset, paired_transform
 from pathotrain.engine import load_config
 from pathotrain.pathogen.cache import CachedLatentDataset, ensure_latent_cache
-from pathotrain.pathogen.data import PairedTileDataset, paired_transform
 from pathotrain.pathogen.diffusion import (
     DEFAULT_VAE,
     LatentDiffusionTask,

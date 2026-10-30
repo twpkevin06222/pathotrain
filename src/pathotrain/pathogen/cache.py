@@ -38,8 +38,8 @@ from loguru import logger
 from torch.utils.data import DataLoader, Dataset
 
 from pathotrain.dataloader.base import by_stem
+from pathotrain.dataloader.pathogen import IMAGE_SUFFIXES, PairedTileDataset, read_image
 from pathotrain.engine import load_config
-from pathotrain.pathogen.data import IMAGE_SUFFIXES, PairedTileDataset, read_image, to_model_range
 from pathotrain.pathogen.diffusion import DEFAULT_VAE, build_vae
 
 LATENTS, META = "latents.npy", "meta.json"
@@ -91,7 +91,7 @@ def build_latent_cache(
     for n, (source, target) in enumerate(loader):
         if source.shape[-2:] != (height, width):
             raise ValueError(f"tiles must share one size: {source.shape[-2:]} != {(height, width)}")
-        both = torch.cat([source, target]).to(device)
+        both = torch.cat([source, target]).to(device) * 2 - 1  # the VAE takes [-1, 1]
         for k in range(variants):
             z = model.encode(dihedral(both, k)).latent_dist.mean
             latents[i : i + len(source), k] = (
@@ -120,7 +120,7 @@ class CachedLatentDataset(Dataset):
 
     A sample is a dict of unscaled ``"source"`` and ``"target"`` latents, ``(C,
     crop / 8, crop / 8)`` float32, plus with ``image`` the same window of that
-    tile (``"source"`` or ``"target"``) as ``"image"`` in ``[-1, 1]``, for REPA.
+    tile (``"source"`` or ``"target"``) as ``"image"`` in ``[0, 1]``, for REPA.
 
     Raises:
         FileNotFoundError: No complete cache in ``cache_dir``.
@@ -176,9 +176,8 @@ class CachedLatentDataset(Dataset):
         if self.image is not None:
             tile = dihedral(read_image(self.pairs[i][0 if self.image == "source" else 1]), k)
             f = self.factor
-            sample["image"] = to_model_range(
-                tile[:, y * f : (y + size) * f, x * f : (x + size) * f]
-            )
+            window = tile[:, y * f : (y + size) * f, x * f : (x + size) * f]
+            sample["image"] = window.float() / 255
         return sample
 
 

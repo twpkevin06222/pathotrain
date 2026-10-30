@@ -1,6 +1,6 @@
 """Baseline latent diffusion (Stable Diffusion style) for paired image translation.
 
-A frozen Stable Diffusion VAE maps ``(3, H, W)`` tiles in ``[-1, 1]`` to
+A frozen Stable Diffusion VAE maps ``(3, H, W)`` tiles in ``[0, 1]`` to
 ``(4, H/8, W/8)`` latents. A UNet, trained from scratch, denoises the target
 latent given the source latent concatenated on the channel axis (as
 InstructPix2Pix conditions on its input image), under Stable Diffusion's DDPM
@@ -61,8 +61,8 @@ class LatentTranslationTask(Task):
     decay. Subclasses give ``_objective`` (the training loss; deterministic given
     ``generator``) and ``_sample`` (latents from noise).
 
-    A batch is ``(source, target)`` images in ``[-1, 1]``, or, for training from a
-    latent cache (:class:`~pathotrain.pathogen.data.CachedLatentDataset`), a dict
+    A batch is ``(source, target)`` images in ``[0, 1]``, or, for training from a
+    latent cache (:class:`~pathotrain.pathogen.cache.CachedLatentDataset`), a dict
     with unscaled ``"source"`` and ``"target"`` latents (and ``"image"`` for REPA).
 
     Validation runs the EMA weights (``ema_decay=None``: the trained ones) and
@@ -132,8 +132,8 @@ class LatentTranslationTask(Task):
 
     @torch.no_grad()
     def encode(self, images: Tensor, sample: bool = False) -> Tensor:
-        """``[-1, 1]`` images to scaled latents (the posterior mean unless ``sample``)."""
-        posterior = self.vae.encode(images).latent_dist
+        """``[0, 1]`` images to scaled latents (the posterior mean unless ``sample``)."""
+        posterior = self.vae.encode(images * 2 - 1).latent_dist  # the VAE takes [-1, 1]
         return (posterior.sample() if sample else posterior.mode()) * self.vae.config.scaling_factor
 
     @torch.no_grad()
@@ -176,9 +176,8 @@ class LatentTranslationTask(Task):
         self.val_loss.update(loss, len(source))
         if self._val_batches < self.sample_batches:
             fake = self.translate(source, generator=generator)
-            real = (target + 1) / 2
-            self.psnr.update(fake, real)
-            self.ssim.update(fake, real)
+            self.psnr.update(fake, target)
+            self.ssim.update(fake, target)
         self._val_batches += 1
 
     def compute_metrics(self) -> dict[str, float]:
@@ -196,7 +195,7 @@ class LatentTranslationTask(Task):
         self, source: Tensor, steps: int | None = None, generator: torch.Generator | None = None
     ) -> Tensor:
         """Sample targets with :attr:`net` for ``(B, 3, H, W)`` source images in
-        ``[-1, 1]`` (sides a multiple of the VAE's and the model's downsampling);
+        ``[0, 1]`` (sides a multiple of the VAE's and the model's downsampling);
         return them in ``[0, 1]``."""
         condition = self.encode(source)
         return self.decode(self._sample(condition, steps or self.sample_steps, generator))

@@ -1,5 +1,6 @@
-"""Paired tiles for image-to-image translation (e.g. H&E to IHC): a source and a
-target image of the same registered tissue, with the same file stem."""
+"""Paired tiles for image-to-image translation (e.g. H&E to IHC, for
+:mod:`pathotrain.pathogen`): a source and a target image of the same registered
+tissue, with the same file stem."""
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -24,16 +25,11 @@ def read_image(path: str | Path) -> tv_tensors.Image:
         return tv_tensors.Image(pil_to_tensor(image.convert("RGB")))
 
 
-def to_model_range(image: torch.Tensor) -> torch.Tensor:
-    """uint8 ``[0, 255]`` to float32 ``[-1, 1]``, the VAE's input range."""
-    return image.float() / 127.5 - 1
-
-
 class PairedTileDataset(Dataset):
     """``(source, target)`` tiles paired by file stem across ``source_dirs`` and
     ``target_dirs``; tiles without a partner are skipped with a warning.
 
-    A sample is two ``(3, H, W)`` float32 tensors in ``[-1, 1]``. ``transform``
+    A sample is two ``(3, H, W)`` float32 tensors in ``[0, 1]``. ``transform``
     takes and returns both uint8 ``tv_tensors.Image`` and must change them
     together (see :func:`paired_transform`).
 
@@ -77,7 +73,7 @@ class PairedTileDataset(Dataset):
             )
         if self.transform is not None:
             source, target = self.transform(source, target)
-        return to_model_range(source), to_model_range(target)
+        return source.float() / 255, target.float() / 255
 
 
 def paired_transform(train: bool, crop: int | None = None, resize: int | None = None) -> v2.Compose:

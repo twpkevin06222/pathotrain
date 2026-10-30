@@ -186,6 +186,29 @@ in category id order (names in `ds.class_names`).
   corners. A crop clips boxes without applying `min_box_visibility` again, so
   prefer tiling at the training size to cropping.
 
+## Paired-tile dataloader
+
+For image-to-image translation (virtual staining with `pathotrain.pathogen`):
+two folders of registered tiles per split, paired by file stem. Tiles of a pair
+must have one size; unpaired tiles are skipped with a warning.
+
+```
+HE/train/wsi003_id1002_x22528_y69632.jpg    IHC/train/wsi003_id1002_x22528_y69632.jpg
+```
+
+```python
+from pathotrain.dataloader import PairedTileDataset, paired_transform
+
+train = PairedTileDataset(["HE/train"], ["IHC/train"], paired_transform(True, crop=512))
+val = PairedTileDataset(["HE/val"], ["IHC/val"], paired_transform(False, crop=512))
+source, target = train[0]  # (3, 512, 512) float32 in [0, 1] each
+```
+
+`paired_transform(train, crop, resize)` applies the same geometry to both
+tiles: an optional resize, a random (train) or centre (val) crop, and for
+training flips and 90 degree turns. It never changes colours, since the
+target's colours are what a translation model learns.
+
 ## Tests
 
 ```bash
