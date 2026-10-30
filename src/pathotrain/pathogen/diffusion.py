@@ -69,7 +69,8 @@ class LatentTranslationTask(Task):
     reports ``val/loss`` (the loss with fixed noise, so epochs compare) and, on the
     first ``sample_batches`` batches, ``val/psnr`` and ``val/ssim`` of images sampled
     with ``sample_steps`` steps against the targets (in ``[0, 1]``);
-    ``sample_batches=0`` skips sampling (then monitor ``val/loss``, mode min).
+    ``sample_batches=0`` skips sampling (then monitor ``val/loss``, mode min). The
+    train command puts tiles from across the val set in those batches.
 
     Args:
         ema_decay: Decay of the EMA, updated after every optimizer step and warmed

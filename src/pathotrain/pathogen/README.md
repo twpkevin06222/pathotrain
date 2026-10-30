@@ -66,6 +66,26 @@ python -m pathotrain.pathogen.train config.yaml --resume runs/ldm01/checkpoints/
   precision (bf16-mixed by default). On one RTX 5090, 512 px crops at batch 8
   take ~0.35 s per step, most of it encoding both tiles with the VAE.
 
+### Evaluation
+
+Score a checkpoint on a held-out split. `best.ckpt` was chosen on `val`, so
+report a `test` split: add one under `data` (`source` and `target` folders, as
+`val`) and pass that config.
+
+```bash
+python -m pathotrain.pathogen.eval runs/ldm01/checkpoints/best.ckpt --config config.yaml
+python -m pathotrain.pathogen.eval runs/ldm01/checkpoints/best.ckpt --split val --steps 25
+```
+
+- Every tile of the split is translated (validation samples only its first
+  `sample_batches` batches) and scored against its target: `test/psnr`,
+  `test/ssim`, and `test/loss`, the model's loss with fixed noise. Prints JSON;
+  `evaluate(checkpoint, split, config, steps)` returns the dict.
+- The model, its EMA weights and the task settings come from the checkpoint;
+  `data`, `loader` and `trainer` too, unless `--config` gives them. Tiles are
+  prepared as for validation (`data.crop` centre crop). Runs on one device.
+- `--steps` sets the sampling steps (default the task's `sample_steps`).
+
 ### Translation
 
 ```bash
