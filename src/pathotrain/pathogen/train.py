@@ -33,7 +33,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 from pathotrain import experiment
 from pathotrain.dataloader.pathogen import PairedTileDataset, paired_transform
@@ -104,11 +104,24 @@ def build_dataset(cfg: dict, split: str) -> Dataset:
     return PairedTileDataset(s["source"], s["target"], transform)
 
 
+def spread_first(dataset: Dataset, first: int) -> Subset:
+    """``dataset`` reordered so its first ``first`` items are evenly spaced over all
+    of it, followed by the rest in order. Tiles are sorted by name, i.e. grouped
+    by slide, so validation's sampled batches cover every slide, not the first."""
+    n = len(dataset)
+    picked = [i * n // min(first, n) for i in range(min(first, n))]
+    chosen = set(picked)
+    return Subset(dataset, picked + [i for i in range(n) if i not in chosen])
+
+
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     config_path = experiment.start(cfg, resume)
     task = build_task(cfg)
-    val_set = build_dataset(cfg, "val") if "val" in cfg["data"] else None
+    val_set = None
+    if "val" in cfg["data"]:
+        sampled = task.sample_batches * cfg.get("loader", {}).get("batch_size", 1)
+        val_set = spread_first(build_dataset(cfg, "val"), sampled)
     return experiment.fit(
         cfg,
         task,

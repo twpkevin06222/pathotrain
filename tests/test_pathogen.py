@@ -337,3 +337,13 @@ def test_evaluate_samples_every_tile_of_a_split(tmp_path, monkeypatch):
     assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
     fewer = score("val", steps=1)
     assert fewer["val/loss"] == pytest.approx(metrics["val/loss"])  # loss does not sample
+
+
+def test_spread_first_puts_evenly_spaced_tiles_first():
+    from pathotrain.pathogen.train import spread_first
+
+    tiles = list(range(10))  # sorted by name: grouped by slide
+    order = [tiles[i] for i in spread_first(tiles, 4).indices]
+    assert order[:4] == [0, 2, 5, 7] and sorted(order) == tiles  # all kept, once
+    assert spread_first(tiles, 20).indices == tiles  # sampling all: order unchanged
+    assert spread_first(tiles, 0).indices == tiles  # no sampling
