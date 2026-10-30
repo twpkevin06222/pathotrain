@@ -74,6 +74,23 @@ Writes `out/<stem>.png` per tile, at the tile's own size (sides a multiple of
 64 for the default UNet, 16 for SiT with 2 x 2 patches), on the GPU in bf16
 when one is present.
 
+In Python, `load_model` rebuilds the task from the config stored in the
+checkpoint, with the EMA weights, in eval mode. Tiles go in as `[-1, 1]` (not
+mean/std normalised):
+
+```python
+import torch
+from pathotrain.pathogen.data import to_model_range
+from pathotrain.pathogen.train import load_model
+
+task, cfg = load_model("runs/her2_sit01/checkpoints/best.ckpt")
+task.cuda()
+x = to_model_range(torch.from_numpy(he_tile).permute(2, 0, 1))[None].cuda()  # (H, W, 3) uint8 in
+with torch.autocast("cuda", torch.bfloat16):
+    ihc = task.translate(x, steps=25, generator=torch.Generator("cuda").manual_seed(0))
+ihc = (ihc[0].float().permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
+```
+
 ## SiT with rectified flow and REPA
 
 `model.name: sit` swaps the UNet and DDPM for the current recipe; data, VAE,
