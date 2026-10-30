@@ -1,4 +1,4 @@
-# Experiment config for `python -m pathotrain.pathotrain.pathogen.train config.yaml`.
+# Experiment config for `python -m pathotrain.pathogen.train config.yaml`.
 # Copy it, set the paths under `data`, and change what you need. Values shown are
 # the defaults unless marked "example"; sections marked optional can be deleted.
 
@@ -13,18 +13,36 @@ model:
   unet:                     # UNet2DModel arguments
     block_out_channels: [128, 256, 512, 512]  # self-attention on the last two levels
     layers_per_block: 2
+# Or SiT with rectified flow and REPA (FlowMatchingTask): a transformer over 2 x 2 latent
+# patches, ~25 sampling steps; REPA aligns block `depth` with frozen Midnight features.
+# model:
+#   name: sit
+#   vae: stabilityai/sd-vae-ft-mse
+#   size: B                 # S (32M), B (130M), L (457M), XL (674M parameters)
+#   patch_size: 2
+#   repa:                   # null trains without REPA
+#     encoder: midnight-12k # a pathotrain.pathofm model
+#     depth: 4              # 1-based block whose tokens are aligned
+#     weight: 0.5           # loss = flow loss + weight * (1 - cosine similarity)
+#     image: target         # or source: Midnight's features of the H&E tile
 
-# Optional; LatentDiffusionTask. AdamW, linear warmup, then cosine decay to 0.
+# Optional; LatentDiffusionTask (or FlowMatchingTask). AdamW, warmup, then cosine decay to 0.
 task:
   lr: 1.0e-4
   weight_decay: 1.0e-2
   warmup_epochs: 0          # e.g. 1; fractions work
+  ema_decay: 0.9999         # EMA of the weights, used for validation, best.ckpt and translate;
+                            # null turns it off
   prediction_type: v_prediction  # or epsilon
   num_train_timesteps: 1000
   sample_steps: 50          # DDIM steps for validation samples (and translate's default)
   sample_batches: 2         # val batches sampled for val/psnr and val/ssim; 0 skips
                             # (then monitor val/loss with mode: min)
   seed: 0                   # fixed validation noise
+  # For sit (FlowMatchingTask) instead of prediction_type and num_train_timesteps:
+  # time_sampling: logit_normal  # or uniform
+  # sampler: euler          # or heun (2 model calls per step)
+  # sample_steps: 25        # its default
 
 # Optional; TrainerConfig.
 trainer:
@@ -57,6 +75,10 @@ loader:
 data:
   crop: 512                 # random crop (train), centre crop (val), same place in both tiles
   resize: null              # e.g. 512: shrink the shorter side first (a larger field of view)
+  cache: false              # true: train from VAE latents encoded once (built on first use,
+                            # reused by later runs on the same data); no resize with it
+  cache_variants: 2         # flips / turns encoded, 1-8 (the VAE is not flip-equivariant)
+  cache_dir: null           # default ~/.cache/pathotrain/latents/<fingerprint of VAE and data>
   # Per split: lists of source and target directories; tiles pair by file stem.
   train:
     source: [data/HE/train]   # example paths

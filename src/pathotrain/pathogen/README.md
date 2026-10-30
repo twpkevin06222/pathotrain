@@ -51,8 +51,8 @@ tiles it reconstructs IHC at 31.1 dB PSNR and 0.80 SSIM.
 
 ```bash
 cp $(python -c "import pathotrain.pathogen, pathlib; print(pathlib.Path(pathotrain.pathogen.__file__).parent)")/config.example.yaml config.yaml
-python -m pathotrain.pathotrain.pathogen.train config.yaml
-python -m pathotrain.pathotrain.pathogen.train config.yaml --resume runs/ldm01/checkpoints/last.ckpt
+python -m pathotrain.pathogen.train config.yaml
+python -m pathotrain.pathogen.train config.yaml --resume runs/ldm01/checkpoints/last.ckpt
 ```
 
 - Validation reports `val/loss` (the denoising loss with fixed noise, so epochs
@@ -71,7 +71,76 @@ python -m pathotrain.pathogen.translate runs/ldm01/checkpoints/best.ckpt HE/test
 ```
 
 Writes `out/<stem>.png` per tile, at the tile's own size (sides a multiple of
-64 for the default UNet), on the GPU in bf16 when one is present.
+64 for the default UNet, 16 for SiT with 2 x 2 patches), on the GPU in bf16
+when one is present.
+
+## SiT with rectified flow and REPA
+
+`model.name: sit` swaps the UNet and DDPM for the current recipe; data, VAE,
+validation, training and translation stay the same.
+
+- **SiT** (Ma et al., 2024): a DiT-style transformer over 2 x 2 patches of the
+  latent (a 512 px tile is 32 x 32 tokens), the time fed through adaLN-Zero.
+  The source latent is concatenated to the noisy target latent, as in the
+  baseline. Sizes S, B, L, XL: 32M, 130M, 457M, 674M parameters.
+- **Rectified flow**: `x_t = (1 - t) x_0 + t noise`; the model predicts the
+  velocity `noise - x_0`, with `t` drawn logit-normal (SD3). Sampling follows
+  the ODE from noise in 25 Euler steps by default (`sampler: heun` for two
+  model calls per step), against 50 DDIM steps for the baseline.
+- **REPA** (Yu et al., 2025): an MLP projects block `repa.depth`'s tokens onto
+  frozen Midnight's patch features of the clean tile, and `repa.weight * (1 -
+  cosine similarity)` is added to the loss. Midnight sees the tile at 14 px per
+  token (448 px for a 512 px crop), so its patches match the tokens one to one.
+  `repa.image: source` aligns with Midnight's H&E features instead, for when
+  its features of the target stain are weak. The encoder and projector are
+  only for training: checkpoints keep the projector, `load_model` drops both.
+
+```yaml
+model:
+  name: sit
+  vae: stabilityai/sd-vae-ft-mse
+  size: B
+  repa: {encoder: midnight-12k, depth: 4, weight: 0.5, image: target}
+task: {lr: 1.0e-4, sampler: euler, sample_steps: 25}
+```
+
+Training logs `flow_loss`, `repa_loss` and their sum `loss`; `val/loss` is the
+flow loss alone. On one RTX 5090, 512 px crops at batch 8 take ~0.27 s per
+step for SiT-B/2, ~0.40 s with REPA (Midnight's forward pass is ~0.11 s).
+
+## EMA and the latent cache
+
+**EMA.** Both models keep an exponential moving average of their weights
+(`task.ema_decay`, 0.9999 by default, warmed up as `min(decay, (1 + n) / (10 +
+n))`), updated after every optimizer step. Validation, `best.ckpt` selection,
+`load_model` and `translate` use it; checkpoints store it under `"ema"` next to
+the trained `"model"`, and a resumed run continues it.
+
+**Latent cache.** The frozen VAE takes most of a training step. Turn on the
+cache to encode the training tiles once instead:
+
+```yaml
+data:
+  crop: 512
+  cache: true          # default false
+  cache_variants: 2    # optional, 1-8
+  train: {source: [HE/train], target: [IHC/train]}
+```
+
+- The first run builds the cache before epoch 1; later runs on the same data
+  reuse it. `python -m pathotrain.pathogen.cache config.yaml` builds it ahead of
+  time. It lives in `~/.cache/pathotrain/latents/<fingerprint>` (or
+  `data.cache_dir`), named after the VAE, the tile directories, the paired tile
+  names and `cache_variants`, so changing any of them builds a new cache.
+- Whole tiles are encoded; each step takes a random `crop / 8` window of their
+  latents (and, for REPA, the same window of the image).
+- The VAE is not equivariant to flips and turns (a flipped latent is ~60% off
+  the latent of the flipped tile), so each augmentation orientation is encoded
+  on its own: `cache_variants` of the 8 flips and turns, 2 (identity and
+  horizontal flip) by default. Without the cache, augmentation uses all 8.
+- HER2match train (11,610 pairs of 1024 px tiles), 2 variants: ~6 GB, ~70 min.
+- Validation always encodes images, so its metrics compare with uncached runs.
+  Under `torchrun`, rank 0 builds and the other ranks wait.
 
 ## Tests
 
