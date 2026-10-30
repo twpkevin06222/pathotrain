@@ -156,6 +156,7 @@ class Trainer:
                 fabric.clip_gradients(task.model, self.optimizer, max_norm=c.grad_clip)
             self.optimizer.step()
             self.optimizer.zero_grad()
+            task.on_optimizer_step()
             if self.scheduler is not None:
                 self.scheduler.step()
             self.step += 1
@@ -191,10 +192,16 @@ class Trainer:
         return self.validate(self.fabric.setup_dataloaders(loader))
 
     def save(self, path: str | Path, weights_only: bool = False, **extra) -> None:
-        """Checkpoint ``model`` (a plain state dict), ``epoch``, ``step`` and
-        ``extra``; unless ``weights_only``, also the optimizer, scheduler and
-        callback state needed to resume. Call on every rank."""
-        state = {"model": self.task.model, "epoch": self.epoch, "step": self.step, **extra}
+        """Checkpoint ``model`` (a plain state dict), the task's ``checkpoint_state``,
+        ``epoch``, ``step`` and ``extra``; unless ``weights_only``, also the optimizer,
+        scheduler and callback state needed to resume. Call on every rank."""
+        state = {
+            "model": self.task.model,
+            **self.task.checkpoint_state(),
+            "epoch": self.epoch,
+            "step": self.step,
+            **extra,
+        }
         if not weights_only:
             state["optimizer"] = self.optimizer
             state["callbacks"] = {
@@ -204,7 +211,8 @@ class Trainer:
 
     def load(self, path: str | Path) -> None:
         # Fabric restores the model and optimizer in place and returns the other entries.
-        rest = self.fabric.load(path, {"model": self.task.model, "optimizer": self.optimizer})
+        modules = {"model": self.task.model, **self.task.checkpoint_state()}
+        rest = self.fabric.load(path, {**modules, "optimizer": self.optimizer})
         if self.scheduler is not None:
             # A saved scheduler state would carry the old run length (cosine T_max), so a
             # longer resumed run would raise the lr again; replay the new schedule instead.

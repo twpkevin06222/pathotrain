@@ -27,6 +27,14 @@ class Task(nn.Module):
         """Return the metrics accumulated since the last call, then reset them."""
         raise NotImplementedError
 
+    def on_optimizer_step(self) -> None:
+        """Called after every optimizer step, e.g. to update an EMA of the weights."""
+
+    def checkpoint_state(self) -> dict[str, nn.Module]:
+        """Modules besides ``model`` to save in checkpoints and restore on resume
+        (e.g. ``{"ema": self.ema}``); keys must not clash with the trainer's own."""
+        return {}
+
     def configure_optimizers(
         self, total_steps: int, steps_per_epoch: int
     ) -> tuple[Optimizer, LRScheduler | None]:

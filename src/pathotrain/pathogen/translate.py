@@ -4,8 +4,9 @@
     python -m pathotrain.pathogen.translate runs/her2_ldm01/checkpoints/best.ckpt HE/test out/
 
 Writes ``<out>/<stem>.png`` per tile. Tiles keep their size, so one batch needs
-one size, with sides a multiple of 8 times the UNet's downsampling (64 for the
-default UNet). Runs on the GPU in bf16 when one is present.
+one size, with sides a multiple of 8 times the model's downsampling (64 for the
+default UNet, 16 for SiT with 2 x 2 patches). Runs on the GPU in bf16 when one is
+present.
 """
 
 import argparse

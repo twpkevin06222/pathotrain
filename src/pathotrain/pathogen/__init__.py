@@ -2,11 +2,20 @@
 Needs the ``pathogen`` extra (``pip install 'pathotrain[pathogen]'``)."""
 
 from pathotrain.pathogen.data import PairedTileDataset, paired_transform
-from pathotrain.pathogen.diffusion import LatentDiffusionTask, build_unet, build_vae
+from pathotrain.pathogen.diffusion import (
+    LatentDiffusionTask,
+    LatentTranslationTask,
+    build_unet,
+    build_vae,
+)
+from pathotrain.pathogen.flow import FlowMatchingTask, SiT
 
 __all__ = [
+    "FlowMatchingTask",
     "LatentDiffusionTask",
+    "LatentTranslationTask",
     "PairedTileDataset",
+    "SiT",
     "build_unet",
     "build_vae",
     "paired_transform",
