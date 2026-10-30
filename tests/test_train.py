@@ -134,3 +134,25 @@ def test_build_dataset_reads_tile_folders(tmp_path):
     assert len(ds) == 1 and ds[0][1].shape == (8, 8)
     with pytest.raises(TypeError):
         build_dataset({"data": {"train": {"images": images, "mask": masks}}}, "train", None)
+
+
+def test_export_writes_an_onnx_graph_with_its_metadata(tmp_path):
+    ort = pytest.importorskip("onnxruntime")
+    import json
+
+    from pathotrain.segmentation import build_model
+    from pathotrain.segmentation.export import export
+
+    cfg = _cfg(tmp_path / "run")
+    cfg["data"]["train"] = {"slides": [], "annotations": [], "tiling": {"tile_size": 64}}
+    torch.save(
+        {"model": build_model(**cfg["model"]).state_dict(), "config": cfg}, tmp_path / "m.ckpt"
+    )
+    path = export(tmp_path / "m.ckpt", tmp_path / "m.onnx")  # checks ONNX against PyTorch
+
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    meta = json.loads(session.get_modelmeta().custom_metadata_map["pathotrain"])
+    assert meta["tile_size"] == 64 and meta["std"] == [0.5, 0.5, 0.5]
+    assert meta["class_map"] == {"tumor": 1} and meta["class_names"] == ["0", "1"]
+    (logits,) = session.run(None, {"image": np.zeros((3, 3, 64, 64), np.float32)})
+    assert logits.shape == (3, 2, 64, 64)

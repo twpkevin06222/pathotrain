@@ -223,6 +223,23 @@ python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split 
   `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - Scores are per tile: with `tile_overlap`, shared pixels count more than once.
 
+### ONNX export
+
+```bash
+pip install "pathotrain[export]"   # onnx, onnxruntime
+python -m pathotrain.segmentation.export runs/exp01/checkpoints/best.ckpt model.onnx
+```
+
+- Input `image` (batch, 3, size, size) float32, normalised as in training;
+  output `logits` (batch, num_classes, size, size). The batch is dynamic; the
+  side is the training tile (or crop) unless `--size`.
+- The `pathotrain` metadata key holds JSON with what inference needs: `mean`,
+  `std`, `tile_size`, `tile_mpp`, `class_names` and `class_map`.
+- Export checks ONNX Runtime against PyTorch on random images. Weights over
+  2 GB (e.g. Midnight encoders) go to `model.onnx.data`; keep it beside the graph.
+- Weights are fp32. Convert to fp16 or quantise to int8 from this file, then
+  check the result with the same tiles.
+
 ### Checkpoints
 
 `ModelCheckpoint(dirpath, monitor="val/miou", mode="max", log_artifact=False, config=None)` writes:
