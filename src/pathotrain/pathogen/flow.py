@@ -241,12 +241,12 @@ class FlowMatchingTask(LatentTranslationTask):
 
     @torch.no_grad()
     def _encoder_features(self, images: Tensor, grid: tuple[int, int]) -> Tensor:
-        """The encoder's patch features of ``[-1, 1]`` images, resized so its patches
+        """The encoder's patch features of ``[0, 1]`` images, resized so its patches
         match the SiT's ``grid`` of tokens one to one; ``(B, tokens, dim)``."""
         patch = self.encoder.config.patch_size
-        # Midnight normalises with mean = std = 0.5: the [-1, 1] range tiles are in.
+        # Midnight normalises with mean = std = 0.5, i.e. to [-1, 1].
         x = F.interpolate(
-            images, size=(grid[0] * patch, grid[1] * patch), mode="bilinear", antialias=True
+            images * 2 - 1, size=(grid[0] * patch, grid[1] * patch), mode="bilinear", antialias=True
         )
         features = segmentation_embedding(self.encoder, x.to(torch.bfloat16))
         return features.flatten(2).transpose(1, 2).float()

@@ -16,7 +16,7 @@ import torch
 from PIL import Image
 
 from pathotrain.dataloader.base import by_stem
-from pathotrain.pathogen.data import IMAGE_SUFFIXES, read_image, to_model_range
+from pathotrain.dataloader.pathogen import IMAGE_SUFFIXES, read_image
 from pathotrain.pathogen.train import load_model
 
 
@@ -38,7 +38,7 @@ def translate_dir(
     written = []
     for i in range(0, len(paths), batch_size):
         chunk = paths[i : i + batch_size]
-        source = torch.stack([to_model_range(read_image(p)) for p in chunk]).to(device)
+        source = torch.stack([read_image(p).float() / 255 for p in chunk]).to(device)
         generator = torch.Generator(device).manual_seed(seed + i)
         with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
             images = task.translate(source, steps, generator)

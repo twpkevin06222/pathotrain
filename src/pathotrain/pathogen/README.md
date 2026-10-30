@@ -23,14 +23,16 @@ HE/val/...                                  IHC/val/...
 ```
 
 ```python
-from pathogen import PairedTileDataset, paired_transform
+from pathotrain.dataloader import PairedTileDataset, paired_transform
 
 train = PairedTileDataset(["HE/train"], ["IHC/train"], paired_transform(True, crop=512))
-source, target = train[0]  # (3, 512, 512) float32 in [-1, 1] each
+source, target = train[0]  # (3, 512, 512) float32 in [0, 1] each
 ```
 
 `paired_transform` crops, flips and turns both tiles together; it never
-changes colours, since the target's colours are what the model learns.
+changes colours, since the target's colours are what the model learns. Both
+live in `pathotrain.dataloader` (see its README); the models scale tiles to the
+VAE's `[-1, 1]` themselves.
 
 ## Baseline: latent diffusion
 
@@ -75,17 +77,17 @@ Writes `out/<stem>.png` per tile, at the tile's own size (sides a multiple of
 when one is present.
 
 In Python, `load_model` rebuilds the task from the config stored in the
-checkpoint, with the EMA weights, in eval mode. Tiles go in as `[-1, 1]` (not
+checkpoint, with the EMA weights, in eval mode. Tiles go in as `[0, 1]` (not
 mean/std normalised):
 
 ```python
 import torch
-from pathotrain.pathogen.data import to_model_range
+from pathotrain.dataloader.base import to_image_tensor
 from pathotrain.pathogen.train import load_model
 
 task, cfg = load_model("runs/her2_sit01/checkpoints/best.ckpt")
 task.cuda()
-x = to_model_range(torch.from_numpy(he_tile).permute(2, 0, 1))[None].cuda()  # (H, W, 3) uint8 in
+x = to_image_tensor(he_tile)[None].cuda()  # (H, W, 3) uint8 tile -> (1, 3, H, W) in [0, 1]
 with torch.autocast("cuda", torch.bfloat16):
     ihc = task.translate(x, steps=25, generator=torch.Generator("cuda").manual_seed(0))
 ihc = (ihc[0].float().permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
@@ -155,7 +157,11 @@ data:
   the latent of the flipped tile), so each augmentation orientation is encoded
   on its own: `cache_variants` of the 8 flips and turns, 2 (identity and
   horizontal flip) by default. Without the cache, augmentation uses all 8.
-- HER2match train (11,610 pairs of 1024 px tiles), 2 variants: ~6 GB, ~70 min.
+- HER2match train (11,610 pairs of 1024 px tiles), 2 variants: 5.7 GB, built
+  in 73 min on one RTX 5090. Training steps (512 px crops, batch 8) then take
+  0.032 s instead of 0.35 s for the UNet, and 0.18 s instead of 0.40 s for
+  SiT-B/2 with REPA, which still runs Midnight on the image crop each step.
+  Validation still encodes its tiles, so it becomes most of an epoch's time.
 - Validation always encodes images, so its metrics compare with uncached runs.
   Under `torchrun`, rank 0 builds and the other ranks wait.
 
