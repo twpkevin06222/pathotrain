@@ -129,6 +129,48 @@ python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --split val
   ...). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - Scores are per tile: tile the split with `tile_overlap: 0` so no object counts twice.
 
+### Inference
+
+`load_model` rebuilds the detector from the config stored in the checkpoint and
+loads its weights. Prepare tiles as in training: a `(H, W, 3)` uint8 tile, to
+`[0, 1]`, normalised with the training mean/std.
+
+```python
+import torch
+from torchvision.transforms.v2.functional import normalize
+from pathotrain.dataloader.base import to_image_tensor
+from pathotrain.detection.train import load_model
+from pathotrain.experiment import normalisation
+
+detector, cfg = load_model("runs/det01/checkpoints/best.ckpt")
+detector.model.eval().cuda()
+mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
+size = cfg["data"]["train"]["tiling"]["tile_size"]  # a multiple of 32
+
+x = normalize(to_image_tensor(tile), mean, std)[None].cuda()
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    out = detector.model(x)
+out = {k: out[k].float() for k in ("pred_logits", "pred_boxes")}
+pred = detector.postprocess(out, torch.tensor([[size, size]], device="cuda"))[0]
+keep = (pred["labels"] < cfg["model"]["num_classes"]) & (pred["scores"] > 0.5)
+boxes, scores, labels = pred["boxes"][keep], pred["scores"][keep], pred["labels"][keep]
+# boxes: [x1, y1, x2, y2] in tile pixels
+```
+
+`labels < num_classes` drops RF-DETR's spare class, as validation does; pick
+the score threshold for your use.
+
+Whole slides: tile at the size and µm/px the model trained on, and run the
+above on each tile:
+
+```python
+from patchology import TileGenerator, TilingConfig
+
+tiling = TilingConfig(**cfg["data"]["train"]["tiling"])
+for (x0, y0), tile in TileGenerator("slide.tif", tiling=tiling):
+    ...  # (x0, y0): the tile's top-left corner in level-0 slide pixels
+```
+
 ### ONNX export
 
 ```bash

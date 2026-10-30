@@ -223,6 +223,39 @@ python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split 
   `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - Scores are per tile: with `tile_overlap`, shared pixels count more than once.
 
+### Inference
+
+`load_model` rebuilds the model from the config stored in the checkpoint and
+loads its weights. Prepare tiles as in training: a `(H, W, 3)` uint8 tile, to
+`[0, 1]`, normalised with the training mean/std.
+
+```python
+import torch
+from torchvision.transforms.v2.functional import normalize
+from pathotrain.dataloader.base import to_image_tensor
+from pathotrain.experiment import normalisation
+from pathotrain.segmentation.train import load_model
+
+model, cfg = load_model("runs/exp01/checkpoints/best.ckpt")
+model.eval().cuda()
+mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
+
+x = normalize(to_image_tensor(tile), mean, std)[None].cuda()  # (1, 3, H, W)
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    mask = model(x).argmax(1)[0].cpu().numpy()  # (H, W) class labels
+```
+
+Whole slides: tile at the size and µm/px the model trained on, and run the
+above on each tile:
+
+```python
+from patchology import TileGenerator, TilingConfig
+
+tiling = TilingConfig(**cfg["data"]["train"]["tiling"])
+for (x0, y0), tile in TileGenerator("slide.tif", tiling=tiling):
+    ...  # (x0, y0): the tile's top-left corner in level-0 slide pixels
+```
+
 ### ONNX export
 
 ```bash
