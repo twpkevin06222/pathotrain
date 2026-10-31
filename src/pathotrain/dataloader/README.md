@@ -229,8 +229,8 @@ The H&E is tiled by `patchology.TileGenerator` (keyword arguments go to it);
 each IHC tile is read from the slide through the registration and warped onto
 the H&E tile's grid, so no warped whole slide is written. A pair is dropped
 when less than `min_target_tissue` (default 0.1) of its IHC tile is tissue,
-e.g. where the IHC section tore or lies off the slide; `tiles.csv` records each
-kept pair's `target_tissue`. Pale fat that fills a tile scores only ~0.1-0.15,
+e.g. where the IHC section tore or lies off the slide; `tiles/<slide>.csv`
+records each kept pair's `target_tissue`. Pale fat that fills a tile scores only ~0.1-0.15,
 so raise it with care; 0 keeps every pair.
 
 ## Tests

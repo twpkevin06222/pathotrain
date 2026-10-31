@@ -105,3 +105,25 @@ def test_tissue_pixels_measures_a_tile_against_the_slide_glass():
     assert tissue_pixels(blank, glass)[1].mean() == 0
     assert tissue_pixels(off_slide, glass)[1].mean() == 0
     assert 0.4 < tissue_pixels(half, glass)[1].mean() < 0.6
+
+
+def test_pair_slides_by_key(tmp_path):
+    import pytest
+
+    from pathotrain.registration.batch import pair_slides
+
+    he, ihc = tmp_path / "he", tmp_path / "ihc"
+    he.mkdir()
+    ihc.mkdir()
+    for name in ("0_HE_val.tiff", "10_HE_val.tiff", "7_HE_val.tiff"):
+        (he / name).touch()
+    for name in ("0_KI67_val.tiff", "10_ER_val.tiff", "3_PGR_val.tiff"):
+        (ihc / name).touch()
+    pairs = pair_slides(he, ihc)
+    assert [(f.name, m.name) for f, m in pairs] == [
+        ("0_HE_val.tiff", "0_KI67_val.tiff"),
+        ("10_HE_val.tiff", "10_ER_val.tiff"),
+    ]
+    (ihc / "0_ER_val.tiff").touch()
+    with pytest.raises(ValueError, match="share key"):
+        pair_slides(he, ihc)

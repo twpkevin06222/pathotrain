@@ -10,7 +10,11 @@ Layout, ready for ``data.<split>`` of a pathogen config::
 
     out_dir/source/<fixed slide>_<x>_<y>.png   the H&E tile
     out_dir/target/<fixed slide>_<x>_<y>.png   the moving slide over the same tissue
-    out_dir/tiles.csv                          name, x, y (fixed level-0)
+    out_dir/tiles/<fixed slide>.csv            name, x, y (fixed level-0), target_tissue
+
+so several slide pairs can share one ``out_dir``. The slide's CSV is written
+last: it marks that slide as done. ``python -m pathotrain.registration.batch``
+registers and tiles whole folders of pairs.
 
 Example::
 
@@ -73,6 +77,11 @@ def glass_colour(slide: SlideReader) -> np.ndarray:
     return np.percentile(thumbnail.reshape(-1, 3).astype(np.float32), 90, axis=0)
 
 
+def tiles_csv(out_dir: str | Path, registration: Registration) -> Path:
+    """Where :func:`export_registered_tiles` lists the tiles of ``registration``."""
+    return Path(out_dir) / "tiles" / f"{Path(registration.fixed).stem}.csv"
+
+
 def export_registered_tiles(
     registration: Registration | str | Path,
     out_dir: str | Path,
@@ -119,7 +128,8 @@ def export_registered_tiles(
             Image.fromarray(tile).save(source / f"{name}.{fmt}")
             Image.fromarray(other).save(target / f"{name}.{fmt}")
             rows.append((name, x, y, round(fraction, 4)))
-    with open(root / "tiles.csv", "w", newline="") as f:
+    (root / "tiles").mkdir(exist_ok=True)
+    with open(tiles_csv(root, registration), "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(("name", "x", "y", "target_tissue"))
         writer.writerows(rows)

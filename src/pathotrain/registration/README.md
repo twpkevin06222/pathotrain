@@ -8,6 +8,12 @@ tiled over the same tissue, e.g. for virtual staining with
 `pathotrain.pathogen`. A helper, not a trained model: no extra dependencies
 beyond OpenCV and torch.
 
+![H&E and IHC slides before and after registration](figures/registration_example.png)
+
+Two ACROBAT validation pairs. The IHC slides come in turned 180 degrees and
+shifted on the glass; after registration their tissue lies on the H&E's
+(overlays: H&E tissue green, IHC magenta, white where they overlap).
+
 ```bash
 python -m pathotrain.registration.affine HE.tiff IHC.tiff reg.json --overlay reg.jpg
 ```
@@ -25,6 +31,30 @@ reg = Registration.load("reg.json")
 Then tile both slides with
 `pathotrain.dataloader.registration.export_registered_tiles` (see the
 dataloader README).
+
+## Batch: register and tile folders of pairs
+
+```bash
+python -m pathotrain.registration.batch he_slides/ ihc_slides/ tiles/train \
+    --tile-size 1024 --tile-mpp 1.0
+```
+
+- Slides pair by `--key`, a regex on the file stem (default `^[^_]+`, the text
+  before the first `_`: `0_HE_val.tiff` with `0_KI67_val.tiff`); unpaired
+  slides are skipped with a warning.
+- Writes `registrations/<H&E stem>.json` and `.jpg` (overlay) per pair, the
+  tile pairs in `source/` and `target/` (ready for `data.<split>` of a pathogen
+  config), `tiles/<H&E stem>.csv`, and `registrations.csv` (NCC, status and
+  tile count per pair).
+- Pairs below `--min-ncc` (0.55) are registered but not tiled: check their
+  overlays, and rerun with a lower `--min-ncc` to tile the good ones.
+- Reruns reuse saved registrations and skip slides already tiled, so an
+  interrupted batch resumes. `--tissue-overlap` (H&E) and
+  `--min-target-tissue` (IHC, default 0.1) set which tiles are kept.
+- One output folder per split: split slides by patient into separate folders
+  first, or run per split.
+- On one RTX 5090, ACROBAT pairs took ~6 s to register and 25-75 s to tile at
+  1024 px, 1 um per pixel (60-250 tile pairs each).
 
 ## How it works
 
@@ -48,6 +78,8 @@ The H&E is fixed; the other slide moves onto it with one affine transform.
 the other slide magenta, white where they overlap).
 
 ## Results on ACROBAT
+
+Using ACROBAT validation set as a benchmark stress test. 
 
 ACROBAT validation (100 H&E / IHC breast cancer pairs: ER, PGR, HER2, KI67;
 many turned 180 degrees, IHC slides with extra control tissue):
