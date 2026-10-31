@@ -1,5 +1,5 @@
-"""Shared by the segmentation and detection datasets: pairing slides with their
-GeoJSON annotations, and a dataset over one tile generator per slide."""
+"""Shared by the slide datasets: pairing slides with their GeoJSON annotations,
+and a dataset over one tile generator per slide."""
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -76,10 +76,15 @@ class SlideDataset(Dataset):
         **generator_kwargs,
     ) -> None:
         self.transform = transform
+        self._open(find_pairs(slide_dirs, annotation_dirs), generator_kwargs)
+
+    def _open(self, sources: Sequence[tuple], generator_kwargs: dict) -> None:
+        """One ``generator_cls(*source, **generator_kwargs)`` per source, e.g.
+        ``(slide, annotation)``."""
         self.generators = []
         try:
-            for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):
-                gen = self.generator_cls(slide, ground_truth, **generator_kwargs)
+            for source in sources:
+                gen = self.generator_cls(*source, **generator_kwargs)
                 # Free thumbnail and masks (~40 MB a slide) as soon as tiling is done.
                 gen.release_overviews()
                 self.generators.append(gen)

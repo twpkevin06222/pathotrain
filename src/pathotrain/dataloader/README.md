@@ -233,6 +233,54 @@ e.g. where the IHC section tore or lies off the slide; `tiles/<slide>.csv`
 records each kept pair's `target_tissue`. Pale fat that fills a tile scores only ~0.1-0.15,
 so raise it with care; 0 keeps every pair.
 
+## Self-supervised and classification dataloaders
+
+For `pathotrain.histossl`: unlabelled tiles, the multi-crop views of DINO-style
+methods, and labelled tiles for the linear probe.
+
+```python
+from patchology import TilingConfig
+from torch.utils.data import DataLoader
+from pathotrain.dataloader import (
+    ClassTileDataset,
+    MultiCropTransform,
+    UnlabelledSlideDataset,
+    UnlabelledTileFolderDataset,
+    multicrop_collate,
+)
+
+views = MultiCropTransform(global_crops=2, local_crops=8)  # 224 and 98 px views
+train = UnlabelledSlideDataset(["data/slides"], views, tiling=TilingConfig(tile_size=224, tile_mpp=0.5))
+# or tiles already on disk: UnlabelledTileFolderDataset(["tiles/train"], views)
+loader = DataLoader(train, batch_size=32, shuffle=True, num_workers=8, collate_fn=multicrop_collate)
+for batch in loader:  # {"global": (2, 32, 3, 224, 224), "local": (8, 32, 3, 98, 98)}
+    ...
+```
+
+- `UnlabelledSlideDataset` tiles every slide in the folders once with
+  `patchology.TileGenerator` (keyword arguments go to it: `tiling`, `tissue`,
+  `artifacts`, `roi`, ...); no annotations. `UnlabelledTileFolderDataset` reads
+  png, jpg and tif files. Without a transform, a sample is the `(3, H, W)` tile
+  in `[0, 1]`.
+- `MultiCropTransform`: each view is a random resized crop (`global_scale`
+  0.32-1, `local_scale` 0.05-0.32 of the tile), flips and 90 degree turns, HED
+  and HSV jitter (`hed`, `hsv`, 0.05), blur (`blur`, probability 0.5), optional
+  JPEG (`jpeg`), then normalisation (mean = std = 0.5, Midnight's, by default).
+  `mask=` adds one patch-token mask per global view under `"masks"`.
+- `multicrop_collate` stacks views first: `(views, batch, 3, H, W)`.
+
+Labelled tiles, from class folders (`root/<class>/*.png`) or a CSV with `path`
+and `label` columns (paths relative to `root`, default the CSV's folder):
+
+```python
+train = ClassTileDataset("crc/train")                        # class_names: sorted folders
+val = ClassTileDataset(csv="crc/val.csv", class_names=train.class_names)
+image, label = train[0]  # (3, H, W) in [0, 1], index into class_names
+```
+
+Pass the train split's `class_names` to the others, so the indices agree even
+when a split lacks a class; a label outside them is an error.
+
 ## Tests
 
 ```bash
