@@ -85,7 +85,7 @@ class Adaptation:
     rank: int = 16
     alpha: float | None = None
     dropout: float = 0.0
-    targets: tuple[str, ...] = ("q_proj", "v_proj")
+    targets: tuple[str, ...] | None = None  # every linear layer of the blocks
 
 
 @dataclass(frozen=True)
@@ -211,8 +211,9 @@ def validate(cfg: dict) -> SSLConfig:
         if adaptation.type == "lora":
             if adaptation.rank < 1:
                 errors.append(f"adaptation.rank must be >= 1, got {adaptation.rank}")
-            bad = sorted(set(adaptation.targets) - set(LORA_TARGETS))
-            if bad or not adaptation.targets:
+            targets = adaptation.targets
+            bad = [] if targets is None else sorted(set(targets) - set(LORA_TARGETS))
+            if bad or targets == ():
                 errors.append(f"adaptation.targets must be among {LORA_TARGETS}, got {bad or []}")
     if teacher is not None:
         if teacher.momentum is not None and teacher.type != "ema":

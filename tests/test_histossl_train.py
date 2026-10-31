@@ -152,7 +152,8 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     best = torch.load(tmp_path / "run/checkpoints/best.ckpt", weights_only=False)
     p = best["provenance"]
     assert p["backbone"].startswith("midnight-12k@") and p["method"] == "teacher_jepa"
-    assert p["adaptation"] == {"type": "lora", "rank": 4, "targets": ["q_proj", "v_proj"]}
+    every_linear = ["fc1", "fc2", "k_proj", "o_proj", "q_proj", "v_proj"]  # the default
+    assert p["adaptation"] == {"type": "lora", "rank": 4, "targets": every_linear}
     assert p["input_size"] == 56 and p["normalisation"]["mean"] == [0.5] * 3 and p["git_commit"]
     assert best["monitor"] == "probe/balanced_acc"
 

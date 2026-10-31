@@ -3,8 +3,9 @@
 - ``full``: every weight.
 - ``frozen``: none (feature extraction, probe baselines).
 - ``last_n``: the last ``n`` transformer blocks and the final LayerNorm.
-- ``lora``: low-rank adapters on ``targets`` (peft, Hu et al. 2021); the base
-  weights stay frozen, and ``model.disable_adapter()`` runs the base model.
+- ``lora``: low-rank adapters on ``targets`` (peft, Hu et al. 2021), by default
+  every linear layer of every block (attention and MLP); the base weights stay
+  frozen, and ``model.disable_adapter()`` runs the base model.
 
 Dinov2 linear layers (transformers 5) per block: ``q_proj``, ``k_proj``,
 ``v_proj`` and ``o_proj`` in attention; in the MLP ``fc1`` and ``fc2``, or with a
@@ -39,14 +40,16 @@ LORA_TARGETS = (
 
 def block_linears(model: nn.Module) -> list[str]:
     """The names of the linear layers in the model's transformer blocks, e.g.
-    ``["down_proj", "gate_proj", ..., "v_proj"]`` for Midnight."""
-    return sorted(
-        {
-            name.rsplit(".", 1)[-1]
-            for name, module in model.named_modules()
-            if isinstance(module, nn.Linear) and re.search(r"encoder\.layer\.\d+\.", name)
-        }
-    )
+    ``["down_proj", "gate_proj", ..., "v_proj"]`` for Midnight; the same once LoRA
+    adapters are in (their own layers are not counted)."""
+    names = set()
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Linear) or not re.search(r"encoder\.layer\.\d+\.", name):
+            continue
+        if ".lora_" in name:  # an adapter's A or B
+            continue
+        names.add(name.removesuffix(".base_layer").rsplit(".", 1)[-1])
+    return sorted(names)
 
 
 def apply_adaptation(
@@ -56,11 +59,13 @@ def apply_adaptation(
     rank: int = 16,
     alpha: float | None = None,
     dropout: float = 0.0,
-    targets: Sequence[str] = ("q_proj", "v_proj"),
+    targets: Sequence[str] | None = None,
 ) -> nn.Module:
     """Set which weights of ``model`` train, as ``type`` says, and return the model
     to train: ``model`` itself, or for ``lora`` a peft ``PeftModel`` around it.
-    ``alpha`` defaults to ``rank`` (adapter scale 1).
+    ``targets`` defaults to every linear layer of the blocks (:func:`block_linears`:
+    for Midnight the attention q, k, v and output projections and the SwiGLU MLP's
+    gate, up and down projections); ``alpha`` defaults to ``rank`` (adapter scale 1).
 
     Raises:
         ValueError: Unknown ``type``, ``n`` outside 1..depth, ``rank < 1`` or a
@@ -90,6 +95,7 @@ def _lora(model, rank, alpha, dropout, targets) -> nn.Module:
     if rank < 1:
         raise ValueError(f"LoRA rank must be >= 1, got {rank}")
     present = block_linears(model)
+    targets = present if targets is None else targets
     # peft only fails when no target matches at all, so a missing one would be skipped.
     missing = sorted(set(targets) - set(present))
     if missing or not targets:

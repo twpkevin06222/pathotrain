@@ -120,8 +120,9 @@ def build_task(cfg: dict, ssl: SSLConfig | None = None, probe=None) -> SSLTask:
     return BUILDERS[ssl.method.name](cfg, ssl, probe)
 
 
-def provenance(ssl: SSLConfig) -> dict:
-    """What a checkpoint must say about its weights besides the config."""
+def provenance(ssl: SSLConfig, task: SSLTask) -> dict:
+    """What a checkpoint must say about its weights besides the config (with the
+    LoRA targets ``task`` really adapted, the default resolved)."""
     bb, ad = ssl.backbone, ssl.adaptation
     mean, std = normalisation(bb.init, bb.id)
     package = Path(__file__).resolve().parent
@@ -147,12 +148,16 @@ def provenance(ssl: SSLConfig) -> dict:
         "adaptation": {
             "type": ad.type,
             **({"n": ad.n} if ad.type == "last_n" else {}),
-            **({"rank": ad.rank, "targets": list(ad.targets)} if ad.type == "lora" else {}),
+            **({"rank": ad.rank, "targets": _lora_targets(task)} if ad.type == "lora" else {}),
         },
         "method": ssl.method.name,
         "git_commit": git_commit,
         "pathotrain_version": version("pathotrain"),
     }
+
+
+def _lora_targets(task: SSLTask) -> list[str]:
+    return sorted(task.backbone.peft_config["default"].target_modules)
 
 
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
@@ -177,7 +182,7 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         monitor=monitor,
         mode=mode,
         trainer_defaults={"grad_clip": 3.0},
-        checkpoint_extra={"provenance": provenance(ssl)},
+        checkpoint_extra={"provenance": provenance(ssl, task)},
         train_sampler=sampler,
         collate_fn=collate,
     )

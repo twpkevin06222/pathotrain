@@ -32,10 +32,12 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   (non-reentrant, so LoRA adapters on a frozen trunk still get gradients).
 - `tokens(model, x, mask)`: final CLS and patch tokens; masked patches take the
   model's `mask_token` (Dinov2's `bool_masked_pos`).
-- `apply_adaptation`: LoRA targets among `q_proj`, `k_proj`, `v_proj`, `o_proj`,
-  `gate_proj`, `up_proj`, `down_proj` for Midnight's SwiGLU MLP (`fc1`, `fc2` for
-  a plain MLP, as the from-scratch ViTs have); default `q_proj`, `v_proj`. Targets
-  the model lacks are an error. `alpha` defaults to the rank.
+- `apply_adaptation`: LoRA by default on every linear layer of every block:
+  `q_proj`, `k_proj`, `v_proj`, `o_proj` and, for Midnight's SwiGLU MLP,
+  `gate_proj`, `up_proj`, `down_proj` (`fc1`, `fc2` for a plain MLP, as the
+  from-scratch ViTs have). `targets: [...]` picks fewer; targets the model lacks
+  are an error, and checkpoints record the layers adapted. `alpha` defaults to
+  the rank.
 - `param_groups`: AdamW groups over trainable weights, no weight decay on
   biases, norms, LayerScale and the CLS / mask / position tokens; optional
   layer-wise learning-rate decay.
@@ -43,9 +45,13 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   masks rectangles (BEiT / iBOT style) and, with `p < 1`, leaves some views
   unmasked.
 
-On one RTX 5090, Midnight-12k with LoRA rank 16 trains 3.9M of 1.14B weights; a
-masked student plus an adapter-off teacher pass at batch 64 (224 px, bf16) peaks
-at 9.6 GiB.
+On one RTX 5090, a masked student plus an adapter-off teacher pass of
+Midnight-12k with LoRA rank 16 at batch 64 (224 px, bf16):
+
+| LoRA targets | trained weights | step | peak memory |
+|---|---|---|---|
+| all 7 per block (default) | 18.7M of 1.14B | 1.45 s | 10.4 GiB |
+| `q_proj`, `v_proj` | 3.9M | 1.13 s | 9.6 GiB |
 
 ## Training: teacher_jepa
 
