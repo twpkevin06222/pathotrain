@@ -1,5 +1,7 @@
-"""lejepa: LeJEPA from scratch (Balestriero & LeCun 2025, "LeJEPA: Provable and
-Scalable Self-Supervised Learning Without the Heuristics").
+"""lejepa: LeJEPA (Balestriero & LeCun 2025, "LeJEPA: Provable and Scalable
+Self-Supervised Learning Without the Heuristics"), from scratch as in the paper,
+or from Midnight's weights (``init: pretrained``, with LoRA or ``last_n``): the
+objective needs no teacher, so it applies to a pretrained encoder unchanged.
 
 Written from the paper; the reference code (rbalestr-lab/lejepa) is CC-BY-NC
 and none of it is used. One network, no teacher, EMA or stop-gradient:
@@ -142,7 +144,7 @@ def build(cfg, ssl, probe=None) -> LeJEPATask:
     head = {k: params.pop(k) for k in ("hidden_dim", "out_dim", "layers") if k in params}
     bb, ad = ssl.backbone, ssl.adaptation
     backbone = build_backbone(bb.init, bb.id, bb.arch, bb.grad_checkpointing)
-    backbone = apply_adaptation(backbone, ad.type)
+    backbone = apply_adaptation(backbone, ad.type, ad.n, ad.rank, ad.alpha, ad.dropout, ad.targets)
     model = LeJEPAModel(backbone, Projector(backbone.config.hidden_size, **head))
     return LeJEPATask(
         model,

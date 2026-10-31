@@ -312,12 +312,11 @@ def test_lejepa_config_rules(tmp_path):
     assert validate(load_config(files("pathotrain.histossl") / "lejepa.example.yaml"))
     cfg = _lejepa_cfg(tmp_path)
     validate(cfg)
+    midnight = {"backbone": {"init": "pretrained", "id": "midnight-12k"}}
+    validate({**cfg, **midnight, "adaptation": {"type": "lora", "rank": 4}})  # on Midnight
     for bad, needle in (
-        (
-            {"backbone": {"init": "pretrained", "id": "midnight-12k"}},
-            "backbone.init in ['scratch']",
-        ),
         ({"adaptation": {"type": "lora"}}, "needs pretrained weights"),
+        ({**midnight, "adaptation": {"type": "frozen"}}, "adaptation.type in"),  # nothing trains
         ({"masking": {"type": "block"}}, "takes no masking"),
         ({"teacher": {"type": "frozen"}}, "teacher.type in ['none']"),
     ):
@@ -354,3 +353,18 @@ def test_lejepa_trains_from_scratch_and_resumes(tmp_path, monkeypatch):
     last = torch.load(tmp_path / "run/checkpoints/last.ckpt", weights_only=False)
     assert int(last["model"]["step"]) == last["step"] == 3 * 2  # seeds SIGReg's directions
     assert last["provenance"]["backbone"] == "vit_s14" and last["provenance"]["init"] == "scratch"
+
+
+def test_lejepa_on_midnight_trains_only_the_adapters_and_projector(tmp_path, monkeypatch):
+    from pathotrain.histossl.methods import lejepa
+
+    monkeypatch.setattr(lejepa, "build_backbone", _tiny)
+    cfg = _lejepa_cfg(tmp_path)
+    cfg["backbone"] = {"init": "pretrained", "id": "midnight-12k"}
+    cfg["adaptation"] = {"type": "lora", "rank": 4}
+    task = build_task(cfg).train()
+    trained = {n for n, p in task.model.named_parameters() if p.requires_grad}
+    assert trained and all("lora_" in n or n.startswith("projector.") for n in trained)
+    batch = {"global": torch.rand(2, 4, 3, 56, 56), "local": torch.rand(2, 4, 3, 28, 28)}
+    task._losses(batch, None)["loss"].backward()
+    assert all(p.grad is not None for n, p in task.model.named_parameters() if "lora_" in n)

@@ -1,6 +1,7 @@
 # Experiment config for `python -m pathotrain.histossl.train config.yaml`.
 # lejepa: LeJEPA (Balestriero & LeCun 2025) from scratch on a ViT-B/14: multi-view
-# prediction plus SIGReg, no teacher. Copy it, set the paths under `data` and
+# prediction plus SIGReg, no teacher. To start from Midnight instead, see the
+# commented backbone and adaptation below. Copy it, set the paths under `data` and
 # `eval`. Values shown are the defaults unless marked "example".
 
 name: lejepa01              # MLflow experiment name
@@ -21,8 +22,12 @@ backbone:
   init: scratch
   arch: vit_b14             # or vit_s14, vit_l14; patch 14, 16 x 16 tokens at 224 px
   grad_checkpointing: true
+  # init: pretrained        # from Midnight's weights instead (and drop arch)
+  # id: midnight-12k
 adaptation:
   type: full                # from scratch everything trains
+  # type: lora              # with Midnight: LoRA (rank, targets) or last_n (n: 4)
+  # rank: 16
 
 task:
   lr: 5.0e-4                # example

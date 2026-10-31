@@ -54,9 +54,9 @@ METHODS = {
         min_global_crops=2,  # each global view is the others' target
     ),
     "lejepa": MethodSpec(
-        init=frozenset({"scratch"}),
+        init=frozenset({"scratch", "pretrained"}),  # from scratch, or on top of Midnight
         teacher=frozenset({"none"}),
-        adaptation=frozenset({"full"}),
+        adaptation=frozenset({"full", "lora", "last_n"}),
         masking="forbidden",
         multicrop=True,
         min_global_crops=2,  # the prediction target is the global views' mean

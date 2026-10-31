@@ -6,8 +6,10 @@
 - ``lora``: low-rank adapters on ``targets`` (peft, Hu et al. 2021); the base
   weights stay frozen, and ``model.disable_adapter()`` runs the base model.
 
-Dinov2 module names (transformers 5): ``q_proj``, ``k_proj``, ``v_proj`` and
-``o_proj`` in attention, ``fc1`` and ``fc2`` in the MLP.
+Dinov2 linear layers (transformers 5) per block: ``q_proj``, ``k_proj``,
+``v_proj`` and ``o_proj`` in attention; in the MLP ``fc1`` and ``fc2``, or with a
+SwiGLU MLP (Midnight, DINOv2 ViT-g) ``gate_proj``, ``up_proj`` and ``down_proj``.
+LoRA targets are checked against the layers the model really has.
 """
 
 import re
@@ -17,7 +19,31 @@ from torch import nn
 from transformers import Dinov2Model
 
 ADAPTATIONS = ("full", "frozen", "last_n", "lora")
-LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "fc1", "fc2")
+# Every linear layer a Dinov2 block may have, plain or SwiGLU MLP; which exist depends on
+# the model (see block_linears).
+LORA_TARGETS = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "fc1",
+    "fc2",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+
+
+def block_linears(model: nn.Module) -> list[str]:
+    """The names of the linear layers in the model's transformer blocks, e.g.
+    ``["down_proj", "gate_proj", ..., "v_proj"]`` for Midnight."""
+    return sorted(
+        {
+            name.rsplit(".", 1)[-1]
+            for name, module in model.named_modules()
+            if isinstance(module, nn.Linear) and re.search(r"encoder\.layer\.\d+\.", name)
+        }
+    )
 
 
 def apply_adaptation(
@@ -60,9 +86,14 @@ def _lora(model, rank, alpha, dropout, targets) -> nn.Module:
         ) from e
     if rank < 1:
         raise ValueError(f"LoRA rank must be >= 1, got {rank}")
-    unknown = sorted(set(targets) - set(LORA_TARGETS))
-    if unknown or not targets:
-        raise ValueError(f"LoRA targets must be among {LORA_TARGETS}, got {list(targets)}")
+    present = block_linears(model)
+    # peft only fails when no target matches at all, so a missing one would be skipped.
+    missing = sorted(set(targets) - set(present))
+    if missing or not targets:
+        raise ValueError(
+            f"LoRA targets {missing or list(targets)} are not linear layers of this model; "
+            f"its blocks have {present}"
+        )
     config = LoraConfig(
         r=rank, lora_alpha=alpha or rank, lora_dropout=dropout, target_modules=list(targets)
     )

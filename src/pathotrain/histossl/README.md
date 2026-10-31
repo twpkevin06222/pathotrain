@@ -4,7 +4,8 @@
 > For research use only. Not a medical device.
 
 Self-supervised learning on pathology tiles: continued pretraining of Midnight
-(teacher_jepa, dinov2) and LeJEPA from scratch. Needs the `histossl` extra for LoRA:
+(teacher_jepa, dinov2, lejepa) and LeJEPA from scratch. Needs the `histossl` extra
+for LoRA:
 
 ```bash
 pip install "pathotrain[histossl]"   # peft
@@ -32,7 +33,9 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
 - `tokens(model, x, mask)`: final CLS and patch tokens; masked patches take the
   model's `mask_token` (Dinov2's `bool_masked_pos`).
 - `apply_adaptation`: LoRA targets among `q_proj`, `k_proj`, `v_proj`, `o_proj`,
-  `fc1`, `fc2` (default `q_proj`, `v_proj`); `alpha` defaults to the rank.
+  `gate_proj`, `up_proj`, `down_proj` for Midnight's SwiGLU MLP (`fc1`, `fc2` for
+  a plain MLP, as the from-scratch ViTs have); default `q_proj`, `v_proj`. Targets
+  the model lacks are an error. `alpha` defaults to the rank.
 - `param_groups`: AdamW groups over trainable weights, no weight decay on
   biases, norms, LayerScale and the CLS / mask / position tokens; optional
   layer-wise learning-rate decay.
@@ -106,9 +109,12 @@ facebookresearch/dinov2 (Apache-2.0).
 python -m pathotrain.histossl.train config.yaml   # start from lejepa.example.yaml
 ```
 
-LeJEPA (Balestriero & LeCun 2025) on a ViT-B/14 from scratch: one network, no
-teacher, EMA or stop-gradient. Written from the paper; the reference code is
-CC-BY-NC and none of it is used.
+LeJEPA (Balestriero & LeCun 2025): one network, no teacher, EMA or
+stop-gradient. From scratch on a ViT-B/14 as in the paper, or on top of
+Midnight (`backbone: {init: pretrained, id: midnight-12k}` with LoRA or
+`last_n`), which needs far fewer steps to be useful; no official LeJEPA weights
+are released. Written from the paper; the reference code is CC-BY-NC and none
+of it is used.
 
 - Prediction: every view's projected CLS embedding moves toward the mean of the
   tile's global views (squared distance), over 2 global and 6 local crops.

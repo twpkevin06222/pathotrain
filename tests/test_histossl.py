@@ -104,6 +104,38 @@ def test_lora_trains_adapters_and_disables_to_the_base():
         apply_adaptation(_tiny(), "lora", rank=0)
 
 
+def test_lora_targets_must_exist_in_the_model():
+    pytest.importorskip("peft")
+    from pathotrain.histossl.adaptation import block_linears
+
+    # Midnight (DINOv2 ViT-g) has a SwiGLU MLP: no fc1 / fc2.
+    swiglu = Dinov2Model(
+        Dinov2Config(
+            hidden_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            patch_size=14,
+            image_size=28,
+            use_swiglu_ffn=True,
+        )
+    )
+    assert block_linears(swiglu) == [
+        "down_proj",
+        "gate_proj",
+        "k_proj",
+        "o_proj",
+        "q_proj",
+        "up_proj",
+        "v_proj",
+    ]
+    with pytest.raises(ValueError, match="\\['fc1'\\] are not linear layers"):
+        apply_adaptation(swiglu, "lora", targets=["q_proj", "fc1"])  # peft would skip fc1
+    model = apply_adaptation(swiglu, "lora", rank=2, targets=["q_proj", "gate_proj", "down_proj"])
+    adapted = {n.split(".lora_")[0].rsplit(".", 1)[-1] for n in _trainable(model)}
+    assert adapted == {"q_proj", "gate_proj", "down_proj"}
+    assert "fc1" in block_linears(_tiny())  # a plain MLP has them
+
+
 def test_param_groups_skip_decay_on_norms_and_tokens_and_decay_lr_by_layer():
     model = apply_adaptation(_tiny(depth=2), "full")
     groups = param_groups(model, lr=1.0, weight_decay=0.05, layer_decay=0.5)
