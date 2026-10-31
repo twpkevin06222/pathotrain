@@ -27,8 +27,10 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
 ```
 
 - `build_backbone`: `pretrained` loads a `pathotrain.pathofm` model at its pinned
-  revision; `scratch` builds `vit_s14`, `vit_b14` or `vit_l14` (patch 14, so 224 px
-  is a 16 x 16 grid either way). Gradient checkpointing is on by default
+  revision; `scratch` builds `vit_s14`, `vit_b14`, `vit_l14` (patch 14, as
+  Midnight: 224 px is a 16 x 16 grid) or `vit_s16`, `vit_b16` (patch 16: 14 x 14).
+  With patch 16, crop sizes must be multiples of 16 (e.g. 96 px local crops, not
+  98). Gradient checkpointing is on by default
   (non-reentrant, so LoRA adapters on a frozen trunk still get gradients).
   `dtype` (`float32`, `bfloat16`, `float16`) stores the weights; `bfloat16`
   halves a frozen trunk under LoRA (adapters stay `float32`). Weights that train

@@ -361,6 +361,44 @@ def test_lejepa_config_rules(tmp_path):
         assert needle in str(e.value)
 
 
+def test_crop_sizes_follow_the_backbone_patch(tmp_path):
+    cfg = _lejepa_cfg(tmp_path)
+    p16 = {**cfg, "backbone": {"init": "scratch", "arch": "vit_s16"}}
+    crops = {"global_crops": 2, "local_crops": 2, "global_size": 224, "local_size": 98}
+    with pytest.raises(ConfigError, match="multiple of the 16 px patch, got 98"):
+        validate({**p16, "data": {**cfg["data"], "crops": crops}})
+    validate({**p16, "data": {**cfg["data"], "crops": {**crops, "local_size": 96}}})
+    with pytest.raises(ConfigError, match="multiple of the 14 px patch, got 96"):  # Midnight
+        validate(
+            {
+                **cfg,
+                "backbone": {"init": "pretrained", "id": "midnight-12k"},
+                "adaptation": {"type": "lora"},
+                "data": {**cfg["data"], "crops": {**crops, "local_size": 96}},
+            }
+        )
+
+
+def test_lejepa_trains_a_patch16_vit(tmp_path, monkeypatch):
+    import mlflow
+
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _lejepa_cfg(tmp_path)
+    cfg["backbone"] = {"init": "scratch", "arch": "vit_s16", "grad_checkpointing": False}
+    cfg["data"]["crops"] = {
+        "global_crops": 2,
+        "local_crops": 2,
+        "global_size": 64,
+        "local_size": 32,
+    }
+    cfg["trainer"]["max_epochs"] = 1
+    metrics = train(cfg)  # a real ViT-S/16, not the stand-in
+    assert np.isfinite(metrics["val/loss"]) and "probe/balanced_acc" in metrics
+    backbone, _ = load_backbone(tmp_path / "run/checkpoints/best.ckpt")
+    assert backbone.config.patch_size == 16 and preprocessing(backbone)["input_size"] == 64
+
+
 def test_lejepa_trains_from_scratch_and_resumes(tmp_path, monkeypatch):
     import mlflow
 

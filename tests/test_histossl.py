@@ -47,6 +47,13 @@ def test_scratch_backbone_masks_tokens():
     assert normalisation("pretrained", "midnight-12k") == ((0.5,) * 3, (0.5,) * 3)
 
 
+def test_patch16_backbones():
+    model = build_backbone("scratch", arch="vit_b16", grad_checkpointing=False).eval()
+    assert model.config.patch_size == 16 and model.config.hidden_size == 768
+    cls, patches = tokens(model, torch.rand(1, 3, 224, 224))
+    assert cls.shape == (1, 768) and patches.shape == (1, 14 * 14, 768)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
