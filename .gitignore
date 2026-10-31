@@ -8,12 +8,9 @@ build/
 .ruff_cache/
 .claude
 
-# Not part of the first stage yet.
-src/pathotrain/histossl/
-
 # Local session notes.
 HANDOFF.md
-
+HISTOSSL_DESIGN.md
 # MLflow local tracking.
 mlruns/
 mlflow.db

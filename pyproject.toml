@@ -38,6 +38,9 @@ export = [
 pathogen = [
     "diffusers>=0.42.1",
 ]
+histossl = [
+    "peft>=0.21.2",
+]
 
 [build-system]
 requires = ["hatchling"]
