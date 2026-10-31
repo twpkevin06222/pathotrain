@@ -14,6 +14,10 @@ every tile of the split is translated and scored. Runs on one device and prints
 the metrics as JSON, keyed ``<split>/...``: ``psnr`` and ``ssim`` of the samples
 against the targets, and ``loss``, the model's loss with fixed noise.
 
+With ``mlflow_db`` in the config (the checkpoint's, or ``--config``'s) or
+``--mlflow-db``, the metrics are also logged to that MLflow store as a run
+``eval-<split>`` of the experiment, with the checkpoint path and steps as params.
+
 Report test metrics: ``best.ckpt`` was chosen on ``val``, so its val score is
 optimistic. Sampling every tile takes a while: ``--steps`` trades accuracy for time.
 """
@@ -23,10 +27,11 @@ import json
 from pathlib import Path
 
 from pathotrain import experiment
-from pathotrain.engine import load_config
+from pathotrain.engine import MLflowLogger, load_config
+from pathotrain.engine.logger import sqlite_store
 from pathotrain.pathogen import train
 
-OVERRIDES = ("data", "loader", "trainer")
+OVERRIDES = ("data", "loader", "trainer", "mlflow_db")
 
 
 def evaluate(
@@ -34,12 +39,14 @@ def evaluate(
     split: str = "test",
     config: dict | None = None,
     steps: int | None = None,
+    mlflow_db: str | Path | None = None,
 ) -> dict[str, float]:
     """Score ``checkpoint`` on ``data[split]`` and return the metrics keyed ``<split>/...``.
 
-    ``config``: an experiment config whose ``data``, ``loader`` and ``trainer``
-    sections replace the checkpoint's. ``steps``: sampling steps (default the
-    task's ``sample_steps``).
+    ``config``: an experiment config whose ``data``, ``loader``, ``trainer`` and
+    ``mlflow_db`` replace the checkpoint's. ``steps``: sampling steps (default the
+    task's ``sample_steps``). ``mlflow_db``: log the metrics to this MLflow store
+    (default the config's ``mlflow_db``; neither logs nothing).
     """
     task, cfg = train.load_model(checkpoint)
     if config is not None:
@@ -49,7 +56,16 @@ def evaluate(
     dataset = train.build_dataset(cfg, split)
     task.sample_batches = len(dataset)  # sample every batch, not validation's first few
     task.sample_steps = steps or task.sample_steps
-    return experiment.evaluate(cfg, task, dataset, split)
+    metrics = experiment.evaluate(cfg, task, dataset, split)
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    if mlflow_db is not None:
+        run = MLflowLogger(cfg["name"], f"eval-{split}", **sqlite_store(mlflow_db))
+        run.log_hyperparams(
+            {"checkpoint": str(Path(checkpoint).resolve()), "steps": task.sample_steps}
+        )
+        run.log_metrics(metrics)
+        run.finalize("success")
+    return metrics
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -58,9 +74,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--split", default="test", help="data split to score (default: test)")
     parser.add_argument("--config", help="YAML whose data, loader and trainer sections apply")
     parser.add_argument("--steps", type=int, help="sampling steps (default: the task's)")
+    parser.add_argument("--mlflow-db", help="also log the metrics to this MLflow SQLite file")
     args = parser.parse_args(argv)
     config = load_config(args.config) if args.config else None
-    print(json.dumps(evaluate(args.checkpoint, args.split, config, args.steps), indent=2))
+    print(
+        json.dumps(
+            evaluate(args.checkpoint, args.split, config, args.steps, args.mlflow_db), indent=2
+        )
+    )
 
 
 if __name__ == "__main__":
