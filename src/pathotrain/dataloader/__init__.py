@@ -7,6 +7,7 @@ from pathotrain.dataloader.detection import (
     export_detection_tiles,
 )
 from pathotrain.dataloader.pathogen import PairedTileDataset, paired_transform
+from pathotrain.dataloader.registration import export_registered_tiles
 from pathotrain.dataloader.segmentation import (
     SegmentationDataset,
     SegmentationTileFolderDataset,
@@ -20,6 +21,7 @@ __all__ = [
     "SegmentationDataset",
     "SegmentationTileFolderDataset",
     "export_detection_tiles",
+    "export_registered_tiles",
     "export_segmentation_tiles",
     "find_pairs",
     "paired_transform",

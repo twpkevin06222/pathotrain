@@ -10,7 +10,6 @@ build/
 
 # Not part of the first stage yet.
 src/pathotrain/histossl/
-src/pathotrain/registration/
 
 # Local session notes.
 HANDOFF.md
