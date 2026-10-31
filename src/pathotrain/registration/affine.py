@@ -70,15 +70,25 @@ class Registration:
         return cls(**json.loads(Path(path).read_text()))
 
 
-def tissue_image(rgb: np.ndarray) -> np.ndarray:
-    """Stain-independent float32 image of an ``(H, W, 3)`` uint8 slide thumbnail:
-    rank-equalised optical density on tissue, 0 on glass, labels and slide edges."""
+def tissue_pixels(
+    rgb: np.ndarray, background: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Optical density (max over channels, blurred) of an ``(H, W, 3)`` uint8 image
+    against the glass colour ``background`` (default: its 90th percentile), and
+    the boolean mask of tissue pixels."""
     x = rgb.astype(np.float32)
-    background = np.percentile(x.reshape(-1, 3), 90, axis=0)
+    if background is None:
+        background = np.percentile(x.reshape(-1, 3), 90, axis=0)
     od = -np.log(np.clip(x / background, 1e-3, 1)).max(-1)
     od = cv2.GaussianBlur(od, (0, 0), 2)
     # Glass is ~0.002 OD with ~0.004 noise; even a pale counterstain is > 0.05.
-    tissue = (od > 0.03) & (x.mean(-1) > 60)  # dark: labels, marker, slide edges
+    return od, (od > 0.03) & (x.mean(-1) > 60)  # dark: labels, marker, slide edges
+
+
+def tissue_image(rgb: np.ndarray) -> np.ndarray:
+    """Stain-independent float32 image of an ``(H, W, 3)`` uint8 slide thumbnail:
+    rank-equalised optical density on tissue, 0 on glass, labels and slide edges."""
+    od, tissue = tissue_pixels(rgb)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     tissue = cv2.morphologyEx(tissue.astype(np.uint8), cv2.MORPH_OPEN, kernel)  # thin lines
     n, labels, stats, _ = cv2.connectedComponentsWithStats(tissue)

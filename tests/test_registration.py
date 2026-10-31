@@ -8,6 +8,7 @@ from pathotrain.registration.affine import (
     refine,
     rigid_search,
     tissue_image,
+    tissue_pixels,
 )
 
 
@@ -92,3 +93,15 @@ def test_registration_round_trips_and_maps_points(tmp_path):
     loaded = Registration.load(tmp_path / "r.json")
     assert loaded == reg
     np.testing.assert_allclose(loaded.to_moving([[10, 20]]), [[80, 15]])
+
+
+def test_tissue_pixels_measures_a_tile_against_the_slide_glass():
+    glass = np.array([233.0, 234.0, 236.0])
+    blank = np.broadcast_to(glass.astype(np.uint8), (64, 64, 3)).copy()
+    pale = (glass * np.exp(-np.array([0.11, 0.08, 0.06]))).astype(np.uint8)  # pale counterstain
+    half = blank.copy()
+    half[:, 32:] = pale
+    off_slide = np.full((64, 64, 3), 255, np.uint8)  # read_registered fills with white
+    assert tissue_pixels(blank, glass)[1].mean() == 0
+    assert tissue_pixels(off_slide, glass)[1].mean() == 0
+    assert 0.4 < tissue_pixels(half, glass)[1].mean() < 0.6
