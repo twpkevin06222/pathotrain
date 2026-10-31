@@ -192,3 +192,8 @@ python -m pathotrain.detection.export runs/det01/checkpoints/best.ckpt model.onn
   PyTorch on random images.
 - Weights are fp32. Convert to fp16 or quantise to int8 from this file, then
   check the result with the same tiles.
+- `--register NAME` also logs the graph to MLflow (`--mlflow-db`, else the
+  config's `mlflow_db`) as a run `export` and registers it as a new version of
+  the model `NAME`, with the metadata above. Load a version with
+  `mlflow.onnx.load_model("models:/NAME/2")`, or set an alias such as `@champion`
+  on it in the MLflow UI and load `models:/NAME@champion`.

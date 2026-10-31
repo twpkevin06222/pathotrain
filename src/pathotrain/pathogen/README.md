@@ -137,6 +137,11 @@ the VAE decoder.
   steps add nodes, not weights (SiT-B with the SD VAE: ~700 MB at any steps).
 - The `pathotrain` metadata key holds JSON with the shapes, steps and sampler.
   Export checks ONNX Runtime against PyTorch on random inputs.
+- `--register NAME` also logs the graph to MLflow (`--mlflow-db`, else the
+  config's `mlflow_db`) as a run `export` and registers it as a new version of
+  the model `NAME`, with the metadata above. Load a version with
+  `mlflow.onnx.load_model("models:/NAME/2")`, or set an alias such as `@champion`
+  on it in the MLflow UI and load `models:/NAME@champion`.
 
 ```python
 import numpy as np

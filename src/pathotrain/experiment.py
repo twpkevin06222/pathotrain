@@ -160,6 +160,38 @@ def log_eval(
     run.finalize("success")
 
 
+def register_onnx(
+    path: str | Path,
+    name: str,
+    cfg: dict,
+    checkpoint: str | Path,
+    mlflow_db: str | Path | None = None,
+) -> int:
+    """Log the ONNX graph at ``path`` (written by :func:`export_onnx`) to MLflow as
+    the model of a run ``export`` of the experiment, register it as a new version
+    of the registered model ``name`` and return the version number. The store is
+    ``mlflow_db`` (default ``cfg["mlflow_db"]``, else ``MLFLOW_TRACKING_URI``); the
+    graph's ``pathotrain`` metadata becomes the model's metadata."""
+    import mlflow.onnx
+    import onnx
+
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    run = MLflowLogger(cfg["name"], "export", **(sqlite_store(mlflow_db) if mlflow_db else {}))
+    run.log_hyperparams({"checkpoint": str(Path(checkpoint).resolve())})  # starts the run
+    graph = onnx.load(str(path))
+    metadata = {p.key: p.value for p in graph.metadata_props}
+    info = mlflow.onnx.log_model(
+        graph,
+        name="model",
+        registered_model_name=name,
+        metadata=json.loads(metadata.get("pathotrain", "{}")),
+    )
+    run.finalize("success")
+    version = int(info.registered_model_version)
+    logger.info(f"registered {path} as {name} version {version}")
+    return version
+
+
 def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
     """DataLoader keyword arguments: pathotrain's defaults, then ``defaults``, then
     the config's ``loader`` section."""

@@ -14,6 +14,10 @@ The batch is dynamic; the side is fixed (the backbone's position embeddings are
 frozen to it): the training tile (or crop) unless ``--size``, a multiple of 32.
 Weights are fp32: convert to fp16 or quantise to int8 from this file. The
 ``pathotrain`` metadata key holds JSON as for segmentation export.
+
+With ``--register NAME``, the graph is also logged to MLflow (``--mlflow-db``,
+else the config's ``mlflow_db``, else ``MLFLOW_TRACKING_URI``) and registered as
+a new version of the model ``NAME``; load it with ``models:/NAME/<version>``.
 """
 
 import argparse
@@ -55,9 +59,16 @@ class _Decoded(nn.Module):
         return (xyxy * self.size).clamp(0, self.size), scores, labels
 
 
-def export(checkpoint: str | Path, path: str | Path, size: int | None = None) -> Path:
+def export(
+    checkpoint: str | Path,
+    path: str | Path,
+    size: int | None = None,
+    register: str | None = None,
+    mlflow_db: str | Path | None = None,
+) -> Path:
     """Write ``checkpoint``'s detector to ``path`` as ONNX at ``size`` px (default the
-    training tile side) and return the path."""
+    training tile side) and return the path. ``register``: also register it in
+    MLflow under this name (see :func:`pathotrain.experiment.register_onnx`)."""
     detector, cfg = train.load_model(checkpoint)
     size = size or experiment.input_size(cfg) or detector.config.resolution
     if size % 32:
@@ -74,7 +85,10 @@ def export(checkpoint: str | Path, path: str | Path, size: int | None = None) ->
         "labels": "(batch, 300) int64 class labels",
     }
     metadata = experiment.onnx_metadata(cfg, "detection", size, outputs)
-    return experiment.export_onnx(decoded, path, size, list(outputs), metadata)
+    experiment.export_onnx(decoded, path, size, list(outputs), metadata)
+    if register is not None:
+        experiment.register_onnx(path, register, cfg, checkpoint, mlflow_db)
+    return Path(path)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -82,8 +96,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("checkpoint", help="best.ckpt or last.ckpt written by train")
     parser.add_argument("output", help="the .onnx file to write")
     parser.add_argument("--size", type=int, help="input side in px (default: training tile)")
+    parser.add_argument("--register", help="also register the graph in MLflow under this name")
+    parser.add_argument(
+        "--mlflow-db", help="MLflow SQLite file for --register (default: the config's mlflow_db)"
+    )
     args = parser.parse_args(argv)
-    export(args.checkpoint, args.output, args.size)
+    export(args.checkpoint, args.output, args.size, args.register, args.mlflow_db)
 
 
 if __name__ == "__main__":

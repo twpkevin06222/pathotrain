@@ -18,6 +18,9 @@ and model downsampling (64 for the default UNet, 16 for SiT with 2 x 2 patches).
 More steps make a larger graph only in nodes; the weights are stored once. The
 ``pathotrain`` metadata key holds JSON with the shapes, steps and sampler. Export
 checks ONNX Runtime against PyTorch on random inputs before returning.
+With ``--register NAME``, the graph is also logged to MLflow (``--mlflow-db``,
+else the config's ``mlflow_db``, else ``MLFLOW_TRACKING_URI``) and registered as
+a new version of the model ``NAME``; load it with ``models:/NAME/<version>``.
 """
 
 import argparse
@@ -44,11 +47,17 @@ class _Translate(nn.Module):
 
 
 def export(
-    checkpoint: str | Path, path: str | Path, size: int | None = None, steps: int | None = None
+    checkpoint: str | Path,
+    path: str | Path,
+    size: int | None = None,
+    steps: int | None = None,
+    register: str | None = None,
+    mlflow_db: str | Path | None = None,
 ) -> Path:
     """Write ``checkpoint``'s translation, sampled in ``steps`` steps (default the
     task's ``sample_steps``) at ``size`` px (default ``data.crop``), to ``path`` as
-    ONNX and return the path."""
+    ONNX and return the path. ``register``: also register it in MLflow under this
+    name (see :func:`pathotrain.experiment.register_onnx`)."""
     task, cfg = train.load_model(checkpoint)
     size = size or cfg["data"].get("crop")
     if size is None:
@@ -77,7 +86,7 @@ def export(
         "sampler": getattr(task, "sampler", "ddim"),
         "outputs": outputs,
     }
-    return experiment.export_onnx(
+    experiment.export_onnx(
         _Translate(task, steps),
         path,
         size,
@@ -85,6 +94,9 @@ def export(
         metadata,
         inputs={"image": (3, size, size), "noise": latent},
     )
+    if register is not None:
+        experiment.register_onnx(path, register, cfg, checkpoint, mlflow_db)
+    return Path(path)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -93,8 +105,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("output", help="the .onnx file to write")
     parser.add_argument("--size", type=int, help="input side in px (default: data.crop)")
     parser.add_argument("--steps", type=int, help="sampling steps (default: the task's)")
+    parser.add_argument("--register", help="also register the graph in MLflow under this name")
+    parser.add_argument(
+        "--mlflow-db", help="MLflow SQLite file for --register (default: the config's mlflow_db)"
+    )
     args = parser.parse_args(argv)
-    export(args.checkpoint, args.output, args.size, args.steps)
+    export(args.checkpoint, args.output, args.size, args.steps, args.register, args.mlflow_db)
 
 
 if __name__ == "__main__":

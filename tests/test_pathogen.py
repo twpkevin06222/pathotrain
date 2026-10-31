@@ -381,4 +381,9 @@ def test_export_matches_translate(tmp_path, sit):
     want = task.translate(source, generator=torch.Generator().manual_seed(1))
     assert np.abs(out - want.numpy()).max() < 1e-4
     with pytest.raises(ValueError, match="multiple of"):
-        export(tmp_path / "m.ckpt", tmp_path / "bad.onnx", size=18)  # tiny models: x4
+        export(tmp_path / "m.ckpt", tmp_path / "bad.onnx", size=18)
+    if sit:  # two inputs register like one
+        db = tmp_path / "project/mlflow.db"
+        export(tmp_path / "m.ckpt", tmp_path / "r.onnx", register="stain", mlflow_db=db)
+        version = mlflow.MlflowClient(f"sqlite:///{db}").get_model_version("stain", "1")
+        assert version.status == "READY"  # tiny models: x4
