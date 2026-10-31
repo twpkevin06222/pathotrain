@@ -139,3 +139,52 @@ def test_masks_hit_the_ratio_and_are_deterministic():
     pickle.loads(pickle.dumps(functools.partial(block_mask, ratio=(0.1, 0.5))))()
     with pytest.raises(ValueError, match="ratio"):
         random_mask(16, 1.5)
+
+
+def test_linear_probe_and_knn_separate_easy_features():
+    from pathotrain.histossl.eval import knn, linear_probe
+
+    g = torch.Generator().manual_seed(0)
+    centres = torch.randn(3, 16, generator=g) * 3
+
+    def sample(n):
+        y = torch.arange(n) % 3
+        return centres[y] + torch.randn(n, 16, generator=g), y
+
+    (train_x, train_y), (test_x, test_y) = sample(90), sample(30)
+    probe = linear_probe(train_x, train_y, test_x, test_y, 3)
+    assert probe["probe/balanced_acc"] > 0.95 and probe["probe/auroc"] > 0.99
+    assert probe["probe/weight_decay"] in (1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)
+    assert linear_probe(train_x, train_y, test_x, test_y, 3) == probe  # deterministic
+    near = knn(train_x, train_y, test_x, test_y, 3, k=5)
+    assert near["knn/acc"] > 0.95 and set(near) == {
+        "knn/acc",
+        "knn/balanced_acc",
+        "knn/macro_f1",
+        "knn/auroc",
+    }
+    noise = linear_probe(torch.randn(90, 16), train_y, torch.randn(30, 16), test_y, 3)
+    assert noise["probe/balanced_acc"] < 0.7  # nothing to learn
+
+
+def test_evaluate_features_runs_on_class_tiles(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    from pathotrain.dataloader import ClassTileDataset
+    from pathotrain.histossl.eval import evaluate_features
+    from pathotrain.histossl.eval.linear_probe import probe_transform
+
+    rng = np.random.default_rng(0)
+    for split, n in (("train", 6), ("test", 4)):
+        for label, colour in (("a", 40), ("b", 220)):
+            (tmp_path / split / label).mkdir(parents=True)
+            for i in range(n):
+                tile = np.clip(rng.normal(colour, 10, (32, 32, 3)), 0, 255).astype(np.uint8)
+                Image.fromarray(tile).save(tmp_path / split / label / f"{i}.png")
+    transform = probe_transform((0.5,) * 3, (0.5,) * 3, size=28)
+    train = ClassTileDataset(tmp_path / "train", transform)
+    test = ClassTileDataset(tmp_path / "test", transform, class_names=train.class_names)
+    torch.manual_seed(0)
+    metrics = evaluate_features(_tiny(), train, test, 2, k=3, batch_size=4, num_workers=0)
+    assert metrics["probe/acc"] == 1.0 and metrics["knn/acc"] == 1.0  # dark vs bright
