@@ -35,7 +35,6 @@ class MethodSpec:
     masking: Literal["required", "forbidden", "optional"]
     multicrop: bool
     min_global_crops: int = 1
-    implemented: bool = True
 
 
 METHODS = {
@@ -60,7 +59,7 @@ METHODS = {
         adaptation=frozenset({"full"}),
         masking="forbidden",
         multicrop=True,
-        implemented=False,
+        min_global_crops=2,  # the prediction target is the global views' mean
     ),
 }
 
@@ -173,8 +172,6 @@ def validate(cfg: dict) -> SSLConfig:
     spec = METHODS.get(name)
     if spec is None:
         errors.append(f"method.name must be one of {sorted(METHODS)}, got {name!r}")
-    elif not spec.implemented:
-        errors.append(f"method {name!r} is not implemented yet")
     backbone = _parse(Backbone, cfg.get("backbone"), "backbone", errors)
     adaptation = _parse(Adaptation, cfg.get("adaptation", {}), "adaptation", errors)
     teacher = _parse(Teacher, cfg.get("teacher", {"type": "none"}), "teacher", errors)

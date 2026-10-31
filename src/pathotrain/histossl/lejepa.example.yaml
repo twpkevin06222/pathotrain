@@ -1,0 +1,58 @@
+# Experiment config for `python -m pathotrain.histossl.train config.yaml`.
+# lejepa: LeJEPA (Balestriero & LeCun 2025) from scratch on a ViT-B/14: multi-view
+# prediction plus SIGReg, no teacher. Copy it, set the paths under `data` and
+# `eval`. Values shown are the defaults unless marked "example".
+
+name: lejepa01              # MLflow experiment name
+seed: 0
+output_dir: runs/lejepa01
+# mlflow_db: ~/project/mlflow.db
+
+method:
+  name: lejepa
+  lamb: 0.05                # SIGReg's weight; the prediction loss gets 1 - lamb
+  slices: 1024              # random directions per step
+  t_max: 5.0                # Epps-Pulley integration range [-t_max, t_max] ...
+  knots: 17                 # ... and points
+  hidden_dim: 2048          # projector
+  out_dim: 256
+  layers: 3
+backbone:
+  init: scratch
+  arch: vit_b14             # or vit_s14, vit_l14; patch 14, 16 x 16 tokens at 224 px
+  grad_checkpointing: true
+adaptation:
+  type: full                # from scratch everything trains
+
+task:
+  lr: 5.0e-4                # example
+  weight_decay: 0.05
+  warmup_epochs: 10         # example
+trainer:
+  max_epochs: 100           # example; from scratch needs a long run
+  precision: bf16-mixed
+  grad_clip: 3.0
+loader:
+  batch_size: 128           # example; x (2 global + 6 local) views
+  num_workers: 8
+
+data:
+  train:
+    slides: [data/train/slides]               # example; or tiles: [dir, ...]
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+  val:
+    slides: [data/val/slides]                 # example
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+    max_tiles: 1024
+  samples_per_epoch: 128000                   # example
+  crops:
+    global_crops: 2
+    local_crops: 6
+    global_size: 224
+    local_size: 98
+  augmentation: {hed: 0.05, hsv: 0.05, blur: 0.5, jpeg: 0.0}
+
+eval:
+  train: mhist/train.csv    # example
+  test: mhist/test.csv
+  every: 5

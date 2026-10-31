@@ -4,9 +4,7 @@
 > For research use only. Not a medical device.
 
 Self-supervised learning on pathology tiles: continued pretraining of Midnight
-(teacher_jepa, dinov2) and LeJEPA from scratch. Work in progress: teacher_jepa
-and dinov2 train; lejepa is planned (the config registry already knows its
-rules). Needs the `histossl` extra for LoRA:
+(teacher_jepa, dinov2) and LeJEPA from scratch. Needs the `histossl` extra for LoRA:
 
 ```bash
 pip install "pathotrain[histossl]"   # peft
@@ -101,6 +99,30 @@ facebookresearch/dinov2 (Apache-2.0).
   and releases.
 - Validation's `val/loss` uses each tile and its mirror image as the two global
   views, with fixed masks.
+
+## Training: lejepa
+
+```bash
+python -m pathotrain.histossl.train config.yaml   # start from lejepa.example.yaml
+```
+
+LeJEPA (Balestriero & LeCun 2025) on a ViT-B/14 from scratch: one network, no
+teacher, EMA or stop-gradient. Written from the paper; the reference code is
+CC-BY-NC and none of it is used.
+
+- Prediction: every view's projected CLS embedding moves toward the mean of the
+  tile's global views (squared distance), over 2 global and 6 local crops.
+- SIGReg: each view's embeddings, projected on `slices` (1024) random unit
+  directions, are scored against N(0, 1) by the Epps-Pulley statistic (the
+  characteristic functions' squared distance weighted by `exp(-t^2 / 2)`,
+  trapezoid rule on `knots` (17) points over `[-t_max, t_max]` (5), times the
+  batch size). Directions are redrawn each step from the step number, the same
+  on every rank, and saved with the weights for resume.
+- Loss: `(1 - lamb) * prediction + lamb * sigreg`, `lamb` 0.05.
+- The integration range, knots and batch-size scaling were taken from the paper
+  without its code; `t_max`, `knots`, `slices` and `lamb` are settings, so tune
+  them if a run disagrees.
+- The projector's BatchNorm is per GPU under DDP (no SyncBatchNorm).
 
 ## Linear probe and kNN
 

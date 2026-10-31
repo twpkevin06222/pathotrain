@@ -269,3 +269,88 @@ def test_dinov2_freezes_the_head_last_layer_first(tmp_path, monkeypatch):
     task.model.teacher.step.fill_(5)
     assert task._temperature() == pytest.approx(0.07)  # warmup (1 epoch) done
     assert dinov2._cosine(0.9, 1.0, 10, 10) == pytest.approx(1.0)
+
+
+def test_sigreg_scores_gaussian_embeddings_low():
+    from pathotrain.histossl.methods.lejepa import epps_pulley, sigreg
+
+    g = torch.Generator().manual_seed(0)
+    gaussian = torch.randn(512, 16, generator=g)
+    stat = epps_pulley(gaussian)
+    assert stat.shape == (16,) and stat.mean() < 2  # O(1) noise for a true N(0, 1)
+    assert epps_pulley(gaussian * 3).min() > 50 * stat.mean()  # wrong scale
+    assert epps_pulley(torch.zeros(512, 4)).min() > 50 * stat.mean()  # collapsed
+    squashed = gaussian.clone()
+    squashed[:, 1:] *= 0.05  # all but one dimension collapsed: not isotropic
+    low = sigreg(gaussian, 256, torch.Generator().manual_seed(1))
+    assert sigreg(squashed, 256, torch.Generator().manual_seed(1)) > 5 * low
+    same = sigreg(gaussian, 256, torch.Generator().manual_seed(1))
+    assert torch.equal(low, same)  # the same directions for one seed (and every rank)
+
+
+def _lejepa_cfg(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg["method"] = {"name": "lejepa", "hidden_dim": 16, "out_dim": 8, "slices": 32}
+    cfg["backbone"] = {"init": "scratch", "arch": "vit_s14"}
+    cfg["adaptation"] = {"type": "full"}
+    cfg.pop("teacher")
+    cfg["masking"] = None
+    cfg["data"]["crops"] = {
+        "global_crops": 2,
+        "local_crops": 2,
+        "global_size": 56,
+        "local_size": 28,
+    }
+    return cfg
+
+
+def test_lejepa_config_rules(tmp_path):
+    from importlib.resources import files
+
+    from pathotrain.engine import load_config
+
+    assert validate(load_config(files("pathotrain.histossl") / "lejepa.example.yaml"))
+    cfg = _lejepa_cfg(tmp_path)
+    validate(cfg)
+    for bad, needle in (
+        (
+            {"backbone": {"init": "pretrained", "id": "midnight-12k"}},
+            "backbone.init in ['scratch']",
+        ),
+        ({"adaptation": {"type": "lora"}}, "needs pretrained weights"),
+        ({"masking": {"type": "block"}}, "takes no masking"),
+        ({"teacher": {"type": "frozen"}}, "teacher.type in ['none']"),
+    ):
+        with pytest.raises(ConfigError) as e:
+            validate({**cfg, **bad})
+        assert needle in str(e.value)
+
+
+def test_lejepa_trains_from_scratch_and_resumes(tmp_path, monkeypatch):
+    import mlflow
+
+    from pathotrain.histossl.methods import lejepa
+
+    monkeypatch.setattr(lejepa, "build_backbone", _tiny)
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _lejepa_cfg(tmp_path)
+
+    task = build_task(cfg).train()
+    batch = {"global": torch.rand(2, 4, 3, 56, 56), "local": torch.rand(2, 4, 3, 28, 28)}
+    losses = task._losses(batch, None)
+    assert set(losses) == {"loss", "prediction_loss", "sigreg_loss"}
+    losses["loss"].backward()
+    trained = task.model.backbone.named_parameters()
+    # No masking in LeJEPA, so only the mask token gets no gradient.
+    assert [n for n, p in trained if p.requires_grad and p.grad is None] == [
+        "embeddings.mask_token"
+    ]
+
+    metrics = train(cfg)
+    assert {"val/loss", "probe/balanced_acc"} <= metrics.keys()
+    longer = {**cfg, "trainer": {**cfg["trainer"], "max_epochs": 3}}
+    train(longer, resume=tmp_path / "run/checkpoints/last.ckpt")
+    last = torch.load(tmp_path / "run/checkpoints/last.ckpt", weights_only=False)
+    assert int(last["model"]["step"]) == last["step"] == 3 * 2  # seeds SIGReg's directions
+    assert last["provenance"]["backbone"] == "vit_s14" and last["provenance"]["init"] == "scratch"
