@@ -143,6 +143,7 @@ def provenance(ssl: SSLConfig, task: SSLTask) -> dict:
             f"{bb.id}@{FOUNDATION_MODELS[bb.id].revision}" if bb.init == "pretrained" else bb.arch
         ),
         "init": bb.init,
+        "dtype": bb.dtype,
         "normalisation": {"mean": list(mean), "std": list(std)},
         "input_size": ssl.crops.global_size,
         "adaptation": {

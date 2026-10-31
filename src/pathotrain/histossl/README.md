@@ -30,6 +30,13 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   revision; `scratch` builds `vit_s14`, `vit_b14` or `vit_l14` (patch 14, so 224 px
   is a 16 x 16 grid either way). Gradient checkpointing is on by default
   (non-reentrant, so LoRA adapters on a frozen trunk still get gradients).
+  `dtype` (`float32`, `bfloat16`, `float16`) stores the weights; `bfloat16`
+  halves a frozen trunk under LoRA (adapters stay `float32`). Weights that train
+  (`full`, `last_n`) should stay `float32`; the config warns otherwise.
+- `preprocessing(model)`: the `input_size` and `mean` / `std` (on `[0, 1]`
+  pixels) the backbone expects, stored on its config by `build_backbone`
+  (`input_size=`, the training `crops.global_size` in a run). It survives LoRA
+  wrapping and export, so an exported model says how to prepare its tiles.
 - `tokens(model, x, mask)`: final CLS and patch tokens; masked patches take the
   model's `mask_token` (Dinov2's `bool_masked_pos`).
 - `apply_adaptation`: LoRA by default on every linear layer of every block:
@@ -51,6 +58,7 @@ Midnight-12k with LoRA rank 16 at batch 64 (224 px, bf16):
 | LoRA targets | trained weights | step | peak memory |
 |---|---|---|---|
 | all 7 per block (default) | 18.7M of 1.14B | 1.45 s | 10.4 GiB |
+| all 7, trunk in `bfloat16` | 18.7M | 1.43 s | 6.4 GiB |
 | `q_proj`, `v_proj` | 3.9M | 1.13 s | 9.6 GiB |
 
 ## Training: teacher_jepa
@@ -154,8 +162,10 @@ from transformers import Dinov2Model
 encoder = Dinov2Model.from_pretrained("exported/jepa01")
 ```
 
-Prepare tiles as `pathotrain.json` says (`provenance.input_size` px,
-`provenance.normalisation` on `[0, 1]` pixels). In Python,
+Prepare tiles as the model's own config says (`config.preprocessing`, read with
+`preprocessing(encoder)`: input size and mean / std on `[0, 1]` pixels; the same
+values are in `pathotrain.json`). The probe takes the folder directly:
+`python -m pathotrain.histossl.eval.linear_probe exported/jepa01 --train ... --test ...`. In Python,
 `merge_and_export(model, path, metadata)` does the same for any (LoRA) model and
 leaves the model's adapters in place.
 

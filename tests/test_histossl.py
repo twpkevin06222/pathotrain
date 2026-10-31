@@ -104,6 +104,43 @@ def test_lora_trains_adapters_and_disables_to_the_base():
         apply_adaptation(_tiny(), "lora", rank=0)
 
 
+def test_backbone_carries_its_preprocessing(tmp_path):
+    pytest.importorskip("peft")
+    from pathotrain.histossl import preprocessing
+    from pathotrain.histossl.adaptation import merge_and_export
+
+    model = build_backbone("scratch", arch="vit_s14", grad_checkpointing=False, input_size=112)
+    want = {"input_size": 112, "mean": [0.5] * 3, "std": [0.5] * 3}
+    assert preprocessing(model) == want
+    lora = apply_adaptation(model, "lora", rank=2, targets=["q_proj"])
+    assert preprocessing(lora) == want  # through the peft wrapper
+    reloaded = Dinov2Model.from_pretrained(merge_and_export(lora, tmp_path / "out"))
+    assert preprocessing(reloaded) == want and reloaded.config.image_size == 224
+    with pytest.raises(ValueError, match="no preprocessing"):
+        preprocessing(_tiny())
+
+
+def test_backbone_dtype_keeps_lora_adapters_in_fp32():
+    pytest.importorskip("peft")
+    model = build_backbone("scratch", arch="vit_s14", dtype="bfloat16")
+    assert {p.dtype for p in model.parameters()} == {torch.bfloat16}
+    lora = apply_adaptation(model, "lora", rank=4, targets=["q_proj"])
+    adapters = {p.dtype for n, p in lora.named_parameters() if "lora_" in n}
+    frozen = {p.dtype for n, p in lora.named_parameters() if "lora_" not in n}
+    assert adapters == {torch.float32} and frozen == {torch.bfloat16}  # trunk halved
+    # Some CPUs (oneDNN) cannot run a bf16 backward, so the gradients are checked on a GPU.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    lora.to(device)
+    with torch.autocast(device, torch.bfloat16):  # as bf16-mixed training runs it
+        cls, _ = tokens(lora, torch.rand(2, 3, 28, 28, device=device))
+    assert cls.shape == (2, 384)
+    if device == "cuda":
+        cls.float().sum().backward()
+        assert all(p.grad is not None for n, p in lora.named_parameters() if "lora_" in n)
+    with pytest.raises(ValueError, match="dtype"):
+        build_backbone("scratch", arch="vit_s14", dtype="float64")
+
+
 def _swiglu():
     """A tiny Dinov2 with a SwiGLU MLP, as Midnight (DINOv2 ViT-g) has: no fc1 / fc2."""
     config = Dinov2Config(

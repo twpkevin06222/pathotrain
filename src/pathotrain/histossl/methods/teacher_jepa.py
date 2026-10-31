@@ -117,7 +117,9 @@ def build(cfg, ssl, probe=None) -> TeacherJEPATask:
     :class:`~pathotrain.histossl.config.SSLConfig`. Method params: the predictor's
     ``width``, ``depth`` and ``heads``."""
     bb, ad = ssl.backbone, ssl.adaptation
-    backbone = build_backbone(bb.init, bb.id, bb.arch, bb.grad_checkpointing)
+    backbone = build_backbone(
+        bb.init, bb.id, bb.arch, bb.grad_checkpointing, bb.dtype, ssl.crops.global_size
+    )
     teacher = None
     if ad.type != "lora":
         teacher_id = ssl.teacher.id or bb.id
@@ -126,7 +128,9 @@ def build(cfg, ssl, probe=None) -> TeacherJEPATask:
         if teacher_id == bb.id:
             teacher = copy.deepcopy(backbone)
         else:
-            teacher = build_backbone("pretrained", teacher_id, grad_checkpointing=False)
+            teacher = build_backbone(
+                "pretrained", teacher_id, None, False, bb.dtype, ssl.crops.global_size
+            )
     student = apply_adaptation(backbone, ad.type, ad.n, ad.rank, ad.alpha, ad.dropout, ad.targets)
     predictor = Predictor(backbone.config.hidden_size, **ssl.method.params)
     m = ssl.masking

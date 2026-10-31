@@ -27,6 +27,7 @@ backbone:
   init: pretrained
   id: midnight-12k
   grad_checkpointing: true
+  dtype: float32            # bfloat16 halves the frozen trunk under LoRA (adapters stay float32)
 adaptation:
   type: lora                # or last_n (with n: 4), full
   rank: 16

@@ -7,12 +7,19 @@
 
 Masked tokens use Dinov2's own ``bool_masked_pos``: the patch embeddings at masked
 positions are replaced by the model's ``mask_token`` (pretrained in Midnight).
+
+Each backbone carries its preprocessing on its config (``config.preprocessing``:
+``input_size`` and ``mean`` / ``std`` on ``[0, 1]`` pixels), so it survives peft
+wrapping and ``save_pretrained``; read it with :func:`preprocessing`.
 """
 
+import torch
 from torch import Tensor
 from transformers import Dinov2Config, Dinov2Model
 
 from pathotrain.pathofm import FOUNDATION_MODELS, MIDNIGHT_MEAN, MIDNIGHT_STD, load_backbone
+
+DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
 # (hidden size, depth, heads) of the DINOv2 ViT sizes with 14 px patches.
 ARCHS = {"vit_s14": (384, 12, 6), "vit_b14": (768, 12, 12), "vit_l14": (1024, 24, 16)}
@@ -23,21 +30,34 @@ def build_backbone(
     id: str | None = None,
     arch: str | None = None,
     grad_checkpointing: bool = True,
+    dtype: str | torch.dtype = "float32",
+    input_size: int = 224,
 ) -> Dinov2Model:
-    """A pretrained (``id``) or randomly initialised (``arch``) backbone in fp32,
-    with gradient checkpointing unless ``grad_checkpointing=False``.
+    """A pretrained (``id``) or randomly initialised (``arch``) backbone, its
+    weights in ``dtype`` (a name in :data:`DTYPES` or a torch dtype), with gradient
+    checkpointing unless ``grad_checkpointing=False``, and its preprocessing
+    (``input_size`` px, the :func:`normalisation` of ``init`` / ``id``) stored on it.
+
+    ``"bfloat16"`` halves the memory of frozen weights, e.g. Midnight's trunk under
+    LoRA (peft keeps the adapters in fp32); weights that train should stay fp32.
+    Compute precision is the trainer's (``bf16-mixed`` autocast) either way.
 
     Raises:
-        ValueError: ``init`` is not ``pretrained`` or ``scratch``, or its name
-            (``id`` / ``arch``) is missing, unknown or given for the other init.
+        ValueError: ``init`` is not ``pretrained`` or ``scratch``, its name (``id`` /
+            ``arch``) is missing, unknown or given for the other init, or
+            ``dtype`` is unknown.
     """
+    if isinstance(dtype, str):
+        if dtype not in DTYPES:
+            raise ValueError(f"dtype must be one of {sorted(DTYPES)}, got {dtype!r}")
+        dtype = DTYPES[dtype]
     if init == "pretrained":
         if arch is not None or id not in FOUNDATION_MODELS:
             raise ValueError(
                 f"init=pretrained takes an id in {sorted(FOUNDATION_MODELS)} and no arch, "
                 f"got id={id!r}, arch={arch!r}"
             )
-        model = load_backbone(id)
+        model = load_backbone(id, dtype)
     elif init == "scratch":
         if id is not None or arch not in ARCHS:
             raise ValueError(
@@ -55,14 +75,38 @@ def build_backbone(
             image_size=224,
             layerscale_value=1e-5,
         )
-        model = Dinov2Model(config)
+        model = Dinov2Model(config).to(dtype)
     else:
         raise ValueError(f"init must be 'pretrained' or 'scratch', got {init!r}")
     if grad_checkpointing:
         # Non-reentrant: with frozen embeddings (LoRA, last-N), the reentrant variant
         # would see no input that needs gradients and drop the adapters' gradients.
         model.gradient_checkpointing_enable({"use_reentrant": False})
+    return set_preprocessing(model, *normalisation(init, id), input_size)
+
+
+def set_preprocessing(model: Dinov2Model, mean, std, input_size: int = 224) -> Dinov2Model:
+    """Store the tiles ``model`` expects on its config: ``input_size`` px, normalised
+    with ``mean`` / ``std`` (``[0, 1]`` units); returns ``model``."""
+    model.config.preprocessing = {
+        "input_size": int(input_size),
+        "mean": [float(m) for m in mean],
+        "std": [float(s) for s in std],
+    }
     return model
+
+
+def preprocessing(model) -> dict:
+    """``{"input_size", "mean", "std"}`` stored on ``model`` (or its peft wrapper, or a
+    model reloaded with ``from_pretrained`` after :func:`~pathotrain.histossl.adaptation.merge_and_export`).
+
+    Raises:
+        ValueError: The model has none (it was not built by :func:`build_backbone`).
+    """
+    values = getattr(model.config, "preprocessing", None)
+    if values is None:
+        raise ValueError("this backbone has no preprocessing; build it with build_backbone")
+    return dict(values)
 
 
 def normalisation(init: str, id: str | None = None) -> tuple[tuple, tuple]:
