@@ -11,7 +11,7 @@ import torch
 from lightning_fabric import seed_everything
 from loguru import logger
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from patchology import TilingConfig
 from pathotrain.dataloader.augmentation import IMAGENET_MEAN, IMAGENET_STD
@@ -84,6 +84,8 @@ def fit(
     resume: str | Path | None = None,
     monitor: str = "val/miou",
     trainer_defaults: dict | None = None,
+    checkpoint_extra: dict | None = None,
+    train_sampler: Sampler | None = None,
     **loader_kwargs,
 ) -> dict[str, float]:
     """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping`` and
@@ -93,11 +95,16 @@ def fit(
 
     ``monitor`` is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
-    (e.g. ``collate_fn``); the config overrides each.
+    (e.g. ``collate_fn``); the config overrides each. ``checkpoint_extra`` is stored
+    in both checkpoints beside the config (see :class:`ModelCheckpoint`).
+    ``train_sampler`` replaces shuffling, e.g. ``RandomSampler(train_set,
+    num_samples=n)`` for epochs of ``n`` tiles.
     """
     out = Path(cfg["output_dir"])
     checkpoint = {"monitor": monitor, **cfg.get("checkpoint", {})}
-    callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **checkpoint)]
+    callbacks = [
+        ModelCheckpoint(out / "checkpoints", config=cfg, extra=checkpoint_extra, **checkpoint)
+    ]
     if "early_stopping" in cfg:
         callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
     store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
@@ -116,7 +123,7 @@ def fit(
         # are not both held in RAM for the whole run.
         DataLoader(
             train_set,
-            shuffle=True,
+            **({"shuffle": True} if train_sampler is None else {"sampler": train_sampler}),
             **{"persistent_workers": loader.get("num_workers", 0) > 0, **loader},
         ),
         val_loader,

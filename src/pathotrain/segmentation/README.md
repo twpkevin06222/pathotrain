@@ -160,6 +160,12 @@ metrics = trainer.fit(
   `monitor=` (and `mode="min"` for losses) to change it, e.g.
   `ModelCheckpoint("checkpoints", monitor="val/iou_tumor")`. `OptunaPruning`
   has no `mode`; it takes the direction from the study (`sweep(direction=...)`).
+- `TrainerConfig(val_every=5)` validates every 5 epochs and after the last one
+  (for slow validation); the callbacks skip validations without their
+  `monitor`, and `ModelCheckpoint` warns at the end if it never saw it.
+- `ModelCheckpoint(..., extra={"provenance": {...}})` stores more entries in
+  both checkpoints beside `config` (e.g. a git commit, which may differ on
+  resume while the config may not).
 - MLflow writes to `MLFLOW_TRACKING_URI`, e.g. `sqlite:///mlflow.db`. Browse it with
   `mlflow ui --backend-store-uri sqlite:///mlflow.db`. From a config, set
   `mlflow_db: ~/project/mlflow.db` instead: every run then logs to that one

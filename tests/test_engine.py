@@ -142,6 +142,70 @@ def test_early_stopping_waits_patience_validations():
         assert trainer.should_stop is expected
 
 
+def test_hook_before_optimizer_step_sees_the_gradients():
+    class Frozen(SegmentationTask):
+        calls = 0
+
+        def on_before_optimizer_step(self):  # e.g. DINO's last-layer freeze
+            self.calls += 1
+            for p in self.model.parameters():
+                p.grad = None
+
+    torch.manual_seed(0)
+    base = _task()
+    task = Frozen(base.model, num_classes=2, lr=1e-2)
+    before = [p.detach().clone() for p in task.model.parameters()]
+    Trainer(TrainerConfig(max_epochs=2, accumulate=2, **CPU)).fit(task, _loader())
+    assert task.calls == 2 * 2  # 4 batches, 2 per optimizer step
+    assert all(torch.equal(a, b) for a, b in zip(before, task.model.parameters(), strict=True))
+
+
+def test_val_every_validates_every_n_epochs_and_the_last(monkeypatch):
+    trainer = Trainer(TrainerConfig(max_epochs=5, val_every=2, **CPU))
+    epochs = []
+    monkeypatch.setattr(trainer, "validate", lambda loader: epochs.append(trainer.epoch) or {})
+    trainer.fit(_task(), _loader(), _loader())
+    assert epochs == [2, 4, 5]
+    with pytest.raises(ValueError, match="val_every"):
+        TrainerConfig(val_every=0)
+
+
+def test_callbacks_skip_validations_without_their_monitor(tmp_path):
+    trainer = SimpleNamespace(should_stop=False, epoch=1, fabric=SimpleNamespace(loggers=[]))
+    stop = EarlyStopping(monitor="probe/acc", patience=1)
+    checkpoint = ModelCheckpoint(tmp_path, monitor="probe/acc")
+    for _ in range(3):  # epochs without the probe neither stop nor save
+        stop.on_validation_end(trainer, {"val/loss": 1.0})
+        checkpoint.on_validation_end(trainer, {"val/loss": 1.0})
+    assert not trainer.should_stop and checkpoint.best is None
+    checkpoint.on_fit_end(trainer)  # warns that no best.ckpt was written
+
+
+def test_fit_stores_checkpoint_extra_and_takes_a_sampler(tmp_path, tracking):
+    from torch.utils.data import RandomSampler
+
+    from pathotrain import experiment
+
+    config = tmp_path / "config.yaml"
+    config.write_text("name: exp")
+    cfg = {"name": "exp", "output_dir": str(tmp_path / "run"), "trainer": {"max_epochs": 2, **CPU}}
+    data = _loader().dataset
+    experiment.fit(
+        cfg,
+        _task(),
+        data,
+        data,
+        config,
+        checkpoint_extra={"provenance": {"git_commit": "abc"}},
+        train_sampler=RandomSampler(data, num_samples=8),
+        batch_size=4,
+    )
+    for name in ("best.ckpt", "last.ckpt"):
+        ckpt = torch.load(tmp_path / "run/checkpoints" / name, weights_only=False)
+        assert ckpt["provenance"] == {"git_commit": "abc"} and ckpt["config"] == cfg
+    assert ckpt["step"] == 2 * 2  # 8 samples of 16 per epoch, batches of 4
+
+
 def test_bad_log_interval_rejected():
     with pytest.raises(ValueError, match="log_interval"):
         TrainerConfig(log_interval="batch")

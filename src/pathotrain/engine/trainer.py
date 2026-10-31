@@ -37,10 +37,14 @@ class TrainerConfig:
     # optimizer steps, plus the validation metrics per epoch.
     log_interval: Literal["epoch", "step"] = "epoch"
     log_every: int = 50
+    # Validate after every `val_every` epochs and after the last one (e.g. when it is slow).
+    val_every: int = 1
 
     def __post_init__(self) -> None:
         if self.log_interval not in ("epoch", "step"):
             raise ValueError(f"log_interval must be 'epoch' or 'step', got {self.log_interval!r}")
+        if self.val_every < 1:
+            raise ValueError(f"val_every must be >= 1, got {self.val_every}")
 
 
 class Trainer:
@@ -123,7 +127,8 @@ class Trainer:
             while self.epoch < c.max_epochs and not self.should_stop:
                 train = self._train_epoch(train_loader)
                 self.epoch += 1
-                metrics = self.validate(val_loader) if val_loader is not None else {}
+                due = self.epoch % c.val_every == 0 or self.epoch == c.max_epochs
+                metrics = self.validate(val_loader) if val_loader is not None and due else {}
                 logs = {**train, **metrics} if c.log_interval == "epoch" else metrics
                 if logs:
                     fabric.log_dict({"epoch": self.epoch, **logs}, step=self.step)
@@ -152,6 +157,7 @@ class Trainer:
                 fabric.backward(loss / c.accumulate)
             if not last:
                 continue
+            task.on_before_optimizer_step()
             if c.grad_clip is not None:
                 fabric.clip_gradients(task.model, self.optimizer, max_norm=c.grad_clip)
             self.optimizer.step()
