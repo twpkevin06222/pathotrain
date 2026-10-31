@@ -165,6 +165,18 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
         want = task.encoder.eval()(pixel_values=x).last_hidden_state
         assert torch.allclose(backbone(pixel_values=x).last_hidden_state, want, atol=1e-5)
 
+    import json
+
+    from pathotrain.histossl.export import export
+
+    out = export(tmp_path / "run/checkpoints/best.ckpt", tmp_path / "exported")
+    meta = json.loads((out / "pathotrain.json").read_text())
+    assert meta["provenance"] == p and meta["config"] == cfg and meta["lora_merged"]
+    assert meta["monitor"] == "probe/balanced_acc" and meta["step"] == best["step"]
+    exported = Dinov2Model.from_pretrained(out).eval()
+    with torch.no_grad():
+        assert torch.allclose(exported(pixel_values=x).last_hidden_state, want, atol=1e-5)
+
 
 def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
     from pathotrain.histossl.methods.dinov2 import DINOHead, koleo, sinkhorn_knopp

@@ -130,6 +130,29 @@ of it is used.
   them if a run disagrees.
 - The projector's BatchNorm is per GPU under DDP (no SyncBatchNorm).
 
+## Export
+
+```bash
+python -m pathotrain.histossl.export runs/jepa01/checkpoints/best.ckpt exported/jepa01
+```
+
+Writes the encoder as a plain Hugging Face model, LoRA merged into its weights
+(the EMA teacher for dinov2, the student otherwise): `config.json`,
+`model.safetensors` and `pathotrain.json` with the checkpoint's provenance,
+epoch, step, monitored metric and experiment config. It loads with transformers
+alone, e.g. for `pathotrain.segmentation` or another library:
+
+```python
+from transformers import Dinov2Model
+
+encoder = Dinov2Model.from_pretrained("exported/jepa01")
+```
+
+Prepare tiles as `pathotrain.json` says (`provenance.input_size` px,
+`provenance.normalisation` on `[0, 1]` pixels). In Python,
+`merge_and_export(model, path, metadata)` does the same for any (LoRA) model and
+leaves the model's adapters in place.
+
 ## Linear probe and kNN
 
 Score a backbone's frozen tile embeddings (CLS + mean patch token) on a

@@ -12,8 +12,11 @@ SwiGLU MLP (Midnight, DINOv2 ViT-g) ``gate_proj``, ``up_proj`` and ``down_proj``
 LoRA targets are checked against the layers the model really has.
 """
 
+import copy
+import json
 import re
 from collections.abc import Sequence
+from pathlib import Path
 
 from torch import nn
 from transformers import Dinov2Model
@@ -98,6 +101,21 @@ def _lora(model, rank, alpha, dropout, targets) -> nn.Module:
         r=rank, lora_alpha=alpha or rank, lora_dropout=dropout, target_modules=list(targets)
     )
     return get_peft_model(model, config)
+
+
+def merge_and_export(model: nn.Module, path: str | Path, metadata: dict | None = None) -> Path:
+    """Save ``model`` as a plain Hugging Face model in the folder ``path``: LoRA
+    adapters, if any, merged into the weights (of a copy, so ``model`` keeps them),
+    ``config.json`` and ``model.safetensors`` loadable with
+    ``Dinov2Model.from_pretrained(path)`` (no peft needed), and ``metadata`` (e.g. a
+    checkpoint's provenance) in ``pathotrain.json`` beside them. Returns ``path``."""
+    path = Path(path)
+    merged = hasattr(model, "merge_and_unload")
+    plain = copy.deepcopy(model).merge_and_unload() if merged else model
+    plain.save_pretrained(path)
+    record = {**(metadata or {}), "lora_merged": merged}
+    (path / "pathotrain.json").write_text(json.dumps(record, indent=2) + "\n")
+    return path
 
 
 def param_groups(
