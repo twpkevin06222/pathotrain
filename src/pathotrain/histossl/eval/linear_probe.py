@@ -2,6 +2,7 @@
 
     python -m pathotrain.histossl.eval.linear_probe midnight-12k \\
         --train mhist/train.csv --test mhist/test.csv
+    python -m pathotrain.histossl.eval.linear_probe runs/jepa01/checkpoints/best.ckpt ...
 
 ``--train`` and ``--test`` are class folders (``root/<class>/*.png``) or ``path,label``
 CSVs (paths relative to the CSV, or to ``--root``), read with
@@ -67,7 +68,11 @@ def extract(
     was_training = model.training
     model.eval()
     feats, labels = [], []
-    loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
+    # Fresh workers: forking a threaded (training) process can deadlock them.
+    context = "forkserver" if num_workers else None
+    loader = DataLoader(
+        dataset, batch_size=batch_size, num_workers=num_workers, multiprocessing_context=context
+    )
     for images, y in loader:
         with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
             feats.append(classification_embedding(model, images.to(device)).float())
@@ -188,7 +193,9 @@ def _dataset(spec: str, root: str | None, transform, class_names=None) -> ClassT
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("backbone", help="a pathotrain.pathofm model, e.g. midnight-12k")
+    parser.add_argument(
+        "backbone", help="a pathotrain.pathofm model (e.g. midnight-12k) or a histossl .ckpt"
+    )
     parser.add_argument("--train", required=True, help="class folder root or path,label CSV")
     parser.add_argument("--test", required=True, help="class folder root or path,label CSV")
     parser.add_argument("--root", help="folder the CSV paths are relative to")
@@ -196,9 +203,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args(argv)
-    model = build_backbone("pretrained", id=args.backbone, grad_checkpointing=False)
+    if args.backbone.endswith(".ckpt"):
+        from pathotrain.histossl.train import load_backbone
+
+        model, cfg = load_backbone(args.backbone)
+        bb = cfg["backbone"]
+        mean_std = normalisation(bb["init"], bb.get("id"))
+    else:
+        model = build_backbone("pretrained", id=args.backbone, grad_checkpointing=False)
+        mean_std = normalisation("pretrained", args.backbone)
     model.to("cuda" if torch.cuda.is_available() else "cpu")
-    transform = probe_transform(*normalisation("pretrained", args.backbone))
+    transform = probe_transform(*mean_std)
     train = _dataset(args.train, args.root, transform)
     test = _dataset(args.test, args.root, transform, train.class_names)
     metrics = evaluate_features(

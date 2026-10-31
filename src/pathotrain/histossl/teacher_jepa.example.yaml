@@ -1,0 +1,63 @@
+# Experiment config for `python -m pathotrain.histossl.train config.yaml`.
+# teacher_jepa: Midnight-12k with LoRA learns to predict the frozen Midnight's patch
+# tokens at masked patches. Copy it, set the paths under `data` and `eval`, and
+# change what you need. Values shown are the defaults unless marked "example".
+
+name: jepa01                # MLflow experiment name
+seed: 0
+output_dir: runs/jepa01     # config.yaml, checkpoints/ and logs/; one per experiment
+# mlflow_db: ~/project/mlflow.db  # optional: one MLflow store for all runs
+
+method:
+  name: teacher_jepa
+  width: 384                # predictor: a narrow transformer over the student's tokens
+  depth: 6
+  heads: 6
+backbone:
+  init: pretrained
+  id: midnight-12k          # or spectra-midnight-12k
+  grad_checkpointing: true
+adaptation:
+  type: lora                # or last_n (with n: 4), full
+  rank: 16
+  targets: [q_proj, v_proj] # any of q_proj, k_proj, v_proj, o_proj, fc1, fc2
+teacher:
+  type: frozen              # with LoRA: the backbone with its adapters off
+masking:
+  type: block               # or random
+  ratio: [0.4, 0.6]         # masked share of the 16 x 16 patches, drawn per view
+
+task:
+  lr: 1.0e-4
+  weight_decay: 0.05
+  warmup_epochs: 1
+trainer:
+  max_epochs: 10
+  precision: bf16-mixed
+  grad_clip: 3.0
+  val_every: 1
+loader:
+  batch_size: 64            # ~10 GiB on one RTX 5090 with LoRA
+  num_workers: 8
+
+data:
+  train:
+    slides: [data/train/slides]               # example; or tiles: [dir, ...]
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+  val:
+    slides: [data/val/slides]                 # example
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+    max_tiles: 1024                           # evenly spaced across the slides
+  samples_per_epoch: 64000                    # example; tiles drawn per epoch
+  crops:
+    global_crops: 1
+    global_size: 224
+    global_scale: [0.32, 1.0]
+  augmentation: {hed: 0.05, hsv: 0.05, blur: 0.5, jpeg: 0.0}
+
+# Linear probe + kNN on labelled tiles at every `every`-th validation; best.ckpt
+# follows probe/balanced_acc. Leave out to select on val/loss.
+eval:
+  train: mhist/train.csv    # example; class folders or path,label CSVs
+  test: mhist/test.csv
+  every: 1
