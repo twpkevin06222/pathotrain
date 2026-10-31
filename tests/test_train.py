@@ -94,6 +94,10 @@ def test_evaluate_reproduces_the_last_validation(tmp_path, monkeypatch, toy_data
         evaluate(last)
     test = evaluate(last, config={"data": {**cfg["data"], "test": {}}})
     assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
+    assert evaluate(last, "val", mlflow_db=tmp_path / "project/mlflow.db") == pytest.approx(metrics)
+    client = mlflow.MlflowClient(f"sqlite:///{tmp_path}/project/mlflow.db")
+    (run,) = client.search_runs([client.get_experiment_by_name(cfg["name"]).experiment_id])
+    assert run.info.run_name == "eval-val" and run.data.metrics == pytest.approx(metrics)
 
 
 def test_config_helpers_validate():

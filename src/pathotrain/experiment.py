@@ -140,6 +140,26 @@ def evaluate(
     return {f"{split}/{k.removeprefix('val/')}": v for k, v in metrics.items()}
 
 
+def log_eval(
+    cfg: dict,
+    checkpoint: str | Path,
+    split: str,
+    metrics: dict[str, float],
+    mlflow_db: str | Path | None = None,
+    **params,
+) -> None:
+    """Log eval ``metrics`` to ``mlflow_db`` (default ``cfg["mlflow_db"]``; neither
+    logs nothing) as a run ``eval-<split>`` of the experiment, with the checkpoint
+    path and ``params`` as params."""
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    if mlflow_db is None:
+        return
+    run = MLflowLogger(cfg["name"], f"eval-{split}", **sqlite_store(mlflow_db))
+    run.log_hyperparams({"checkpoint": str(Path(checkpoint).resolve()), **params})
+    run.log_metrics(metrics)
+    run.finalize("success")
+
+
 def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
     """DataLoader keyword arguments: pathotrain's defaults, then ``defaults``, then
     the config's ``loader`` section."""

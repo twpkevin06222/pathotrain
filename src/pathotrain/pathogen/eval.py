@@ -27,8 +27,7 @@ import json
 from pathlib import Path
 
 from pathotrain import experiment
-from pathotrain.engine import MLflowLogger, load_config
-from pathotrain.engine.logger import sqlite_store
+from pathotrain.engine import load_config
 from pathotrain.pathogen import train
 
 OVERRIDES = ("data", "loader", "trainer", "mlflow_db")
@@ -57,14 +56,7 @@ def evaluate(
     task.sample_batches = len(dataset)  # sample every batch, not validation's first few
     task.sample_steps = steps or task.sample_steps
     metrics = experiment.evaluate(cfg, task, dataset, split)
-    mlflow_db = mlflow_db or cfg.get("mlflow_db")
-    if mlflow_db is not None:
-        run = MLflowLogger(cfg["name"], f"eval-{split}", **sqlite_store(mlflow_db))
-        run.log_hyperparams(
-            {"checkpoint": str(Path(checkpoint).resolve()), "steps": task.sample_steps}
-        )
-        run.log_metrics(metrics)
-        run.finalize("success")
+    experiment.log_eval(cfg, checkpoint, split, metrics, mlflow_db, steps=task.sample_steps)
     return metrics
 
 

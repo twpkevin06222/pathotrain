@@ -224,6 +224,9 @@ python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split 
   `loader` and `trainer` too, unless `--config` gives them.
 - Prints the metrics as JSON keyed by the split (`test/miou`, `test/iou_<class>`,
   `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- With `mlflow_db` in the config (the checkpoint's or `--config`'s) or
+  `--mlflow-db ~/project/mlflow.db`, the metrics are also logged there as a run
+  `eval-<split>` of the experiment, next to its training run.
 - Scores are per tile: with `tile_overlap`, shared pixels count more than once.
 
 ### Inference
