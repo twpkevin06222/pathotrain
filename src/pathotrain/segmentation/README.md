@@ -161,7 +161,10 @@ metrics = trainer.fit(
   `ModelCheckpoint("checkpoints", monitor="val/iou_tumor")`. `OptunaPruning`
   has no `mode`; it takes the direction from the study (`sweep(direction=...)`).
 - MLflow writes to `MLFLOW_TRACKING_URI`, e.g. `sqlite:///mlflow.db`. Browse it with
-  `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
+  `mlflow ui --backend-store-uri sqlite:///mlflow.db`. From a config, set
+  `mlflow_db: ~/project/mlflow.db` instead: every run then logs to that one
+  file (artifacts in `mlruns/` beside it), wherever it is launched from; browse
+  with `mlflow ui --backend-store-uri sqlite:///$HOME/project/mlflow.db`.
 
 ### From a config file
 

@@ -5,6 +5,7 @@
 name: exp01                 # MLflow experiment name
 seed: 0
 output_dir: runs/exp01      # config.yaml, checkpoints/ and logs/; one per experiment
+# mlflow_db: ~/project/mlflow.db  # optional: one MLflow store for all runs
 # Input normalisation matching the encoder: IMAGENET_MEAN/STD for ImageNet encoders,
 # MIDNIGHT_MEAN/STD for midnight-12k, or 3 numbers in [0, 1] units.
 mean: IMAGENET_MEAN

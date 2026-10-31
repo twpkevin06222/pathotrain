@@ -86,7 +86,9 @@ def fit(
     **loader_kwargs,
 ) -> dict[str, float]:
     """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping`` and
-    ``loader`` sections of ``cfg`` say, logging to MLflow and CSV.
+    ``loader`` sections of ``cfg`` say, logging to MLflow and CSV. MLflow writes
+    to ``cfg["mlflow_db"]`` (artifacts in ``mlruns/`` beside it) when set, else to
+    ``MLFLOW_TRACKING_URI``.
 
     ``monitor`` is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
@@ -97,7 +99,12 @@ def fit(
     callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **checkpoint)]
     if "early_stopping" in cfg:
         callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
-    mlflow_logger = MLflowLogger(experiment=cfg["name"])
+    store = {}
+    if "mlflow_db" in cfg:  # one store for every run, wherever they are launched from
+        db = Path(cfg["mlflow_db"]).expanduser().resolve()
+        db.parent.mkdir(parents=True, exist_ok=True)
+        store = {"tracking_uri": f"sqlite:///{db}", "artifact_location": str(db.parent / "mlruns")}
+    mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
     mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
     trainer = Trainer(
         TrainerConfig(**{**(trainer_defaults or {}), **cfg.get("trainer", {})}),
