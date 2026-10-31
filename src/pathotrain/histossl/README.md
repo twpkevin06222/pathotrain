@@ -30,6 +30,9 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   revision; `scratch` builds `vit_s14`, `vit_b14` or `vit_l14` (patch 14, so 224 px
   is a 16 x 16 grid either way). Gradient checkpointing is on by default
   (non-reentrant, so LoRA adapters on a frozen trunk still get gradients).
+  `dtype` (`float32`, `bfloat16`, `float16`) stores the weights; `bfloat16`
+  halves a frozen trunk under LoRA (adapters stay `float32`). Weights that train
+  (`full`, `last_n`) should stay `float32`; the config warns otherwise.
 - `tokens(model, x, mask)`: final CLS and patch tokens; masked patches take the
   model's `mask_token` (Dinov2's `bool_masked_pos`).
 - `apply_adaptation`: LoRA by default on every linear layer of every block:
@@ -51,6 +54,7 @@ Midnight-12k with LoRA rank 16 at batch 64 (224 px, bf16):
 | LoRA targets | trained weights | step | peak memory |
 |---|---|---|---|
 | all 7 per block (default) | 18.7M of 1.14B | 1.45 s | 10.4 GiB |
+| all 7, trunk in `bfloat16` | 18.7M | 1.43 s | 6.4 GiB |
 | `q_proj`, `v_proj` | 3.9M | 1.13 s | 9.6 GiB |
 
 ## Training: teacher_jepa

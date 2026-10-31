@@ -41,14 +41,15 @@ FOUNDATION_MODELS = {
 }
 
 
-def load_backbone(name: str) -> Dinov2Model:
-    """Download (once, into the Hugging Face cache) and return the fp32 backbone."""
+def load_backbone(name: str, dtype: torch.dtype = torch.float32) -> Dinov2Model:
+    """Download (once, into the Hugging Face cache) and return the backbone, its
+    weights in ``dtype`` (fp32 by default)."""
     if name not in FOUNDATION_MODELS:
         raise ValueError(
             f"unknown foundation model {name!r}, expected one of {sorted(FOUNDATION_MODELS)}"
         )
     fm = FOUNDATION_MODELS[name]
-    return Dinov2Model.from_pretrained(fm.repo_id, revision=fm.revision, dtype=torch.float32)
+    return Dinov2Model.from_pretrained(fm.repo_id, revision=fm.revision, dtype=dtype)
 
 
 def build_encoder(name: str) -> tuple[Dinov2Model, transforms.Compose]:

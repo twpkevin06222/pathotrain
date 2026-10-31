@@ -104,6 +104,27 @@ def test_lora_trains_adapters_and_disables_to_the_base():
         apply_adaptation(_tiny(), "lora", rank=0)
 
 
+def test_backbone_dtype_keeps_lora_adapters_in_fp32():
+    pytest.importorskip("peft")
+    model = build_backbone("scratch", arch="vit_s14", dtype="bfloat16")
+    assert {p.dtype for p in model.parameters()} == {torch.bfloat16}
+    lora = apply_adaptation(model, "lora", rank=4, targets=["q_proj"])
+    adapters = {p.dtype for n, p in lora.named_parameters() if "lora_" in n}
+    frozen = {p.dtype for n, p in lora.named_parameters() if "lora_" not in n}
+    assert adapters == {torch.float32} and frozen == {torch.bfloat16}  # trunk halved
+    # Some CPUs (oneDNN) cannot run a bf16 backward, so the gradients are checked on a GPU.
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    lora.to(device)
+    with torch.autocast(device, torch.bfloat16):  # as bf16-mixed training runs it
+        cls, _ = tokens(lora, torch.rand(2, 3, 28, 28, device=device))
+    assert cls.shape == (2, 384)
+    if device == "cuda":
+        cls.float().sum().backward()
+        assert all(p.grad is not None for n, p in lora.named_parameters() if "lora_" in n)
+    with pytest.raises(ValueError, match="dtype"):
+        build_backbone("scratch", arch="vit_s14", dtype="float64")
+
+
 def _swiglu():
     """A tiny Dinov2 with a SwiGLU MLP, as Midnight (DINOv2 ViT-g) has: no fc1 / fc2."""
     config = Dinov2Config(

@@ -143,7 +143,7 @@ def build(cfg, ssl, probe=None) -> LeJEPATask:
     params = dict(ssl.method.params)
     head = {k: params.pop(k) for k in ("hidden_dim", "out_dim", "layers") if k in params}
     bb, ad = ssl.backbone, ssl.adaptation
-    backbone = build_backbone(bb.init, bb.id, bb.arch, bb.grad_checkpointing)
+    backbone = build_backbone(bb.init, bb.id, bb.arch, bb.grad_checkpointing, bb.dtype)
     backbone = apply_adaptation(backbone, ad.type, ad.n, ad.rank, ad.alpha, ad.dropout, ad.targets)
     model = LeJEPAModel(backbone, Projector(backbone.config.hidden_size, **head))
     return LeJEPATask(

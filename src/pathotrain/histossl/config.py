@@ -14,7 +14,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from pathotrain.histossl.adaptation import ADAPTATIONS, LORA_TARGETS
-from pathotrain.histossl.backbones import ARCHS
+from pathotrain.histossl.backbones import ARCHS, DTYPES
 from pathotrain.pathofm import FOUNDATION_MODELS
 
 PATCH = 14  # every backbone here has 14 px patches
@@ -76,6 +76,7 @@ class Backbone:
     id: str | None = None
     arch: str | None = None
     grad_checkpointing: bool = True
+    dtype: str = "float32"  # of the weights; bfloat16 halves a frozen trunk's memory
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,8 @@ def validate(cfg: dict) -> SSLConfig:
                 )
         else:
             errors.append(f"backbone.init must be pretrained or scratch, got {backbone.init!r}")
+        if backbone.dtype not in DTYPES:
+            errors.append(f"backbone.dtype must be one of {sorted(DTYPES)}, got {backbone.dtype!r}")
     if adaptation is not None:
         if adaptation.type not in ADAPTATIONS:
             errors.append(f"adaptation.type must be one of {ADAPTATIONS}, got {adaptation.type!r}")
@@ -288,6 +291,11 @@ def validate(cfg: dict) -> SSLConfig:
     if errors:
         raise ConfigError("invalid histossl config:\n- " + "\n- ".join(errors))
 
+    if backbone.dtype != "float32" and adaptation.type in ("full", "last_n"):
+        logger.warning(
+            f"{adaptation.type} trains backbone weights stored in {backbone.dtype}: the "
+            "optimizer (and an EMA) lose precision; use float32, or lora for a smaller trunk"
+        )
     if adaptation.type == "full" and backbone.init == "pretrained":
         logger.warning(
             "full fine-tuning of a ViT-g (1.1B) is tight on 32 GB; consider lora or last_n"

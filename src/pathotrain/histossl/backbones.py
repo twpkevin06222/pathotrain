@@ -9,10 +9,13 @@ Masked tokens use Dinov2's own ``bool_masked_pos``: the patch embeddings at mask
 positions are replaced by the model's ``mask_token`` (pretrained in Midnight).
 """
 
+import torch
 from torch import Tensor
 from transformers import Dinov2Config, Dinov2Model
 
 from pathotrain.pathofm import FOUNDATION_MODELS, MIDNIGHT_MEAN, MIDNIGHT_STD, load_backbone
+
+DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
 # (hidden size, depth, heads) of the DINOv2 ViT sizes with 14 px patches.
 ARCHS = {"vit_s14": (384, 12, 6), "vit_b14": (768, 12, 12), "vit_l14": (1024, 24, 16)}
@@ -23,21 +26,32 @@ def build_backbone(
     id: str | None = None,
     arch: str | None = None,
     grad_checkpointing: bool = True,
+    dtype: str | torch.dtype = "float32",
 ) -> Dinov2Model:
-    """A pretrained (``id``) or randomly initialised (``arch``) backbone in fp32,
-    with gradient checkpointing unless ``grad_checkpointing=False``.
+    """A pretrained (``id``) or randomly initialised (``arch``) backbone, its
+    weights in ``dtype`` (a name in :data:`DTYPES` or a torch dtype), with gradient
+    checkpointing unless ``grad_checkpointing=False``.
+
+    ``"bfloat16"`` halves the memory of frozen weights, e.g. Midnight's trunk under
+    LoRA (peft keeps the adapters in fp32); weights that train should stay fp32.
+    Compute precision is the trainer's (``bf16-mixed`` autocast) either way.
 
     Raises:
-        ValueError: ``init`` is not ``pretrained`` or ``scratch``, or its name
-            (``id`` / ``arch``) is missing, unknown or given for the other init.
+        ValueError: ``init`` is not ``pretrained`` or ``scratch``, its name (``id`` /
+            ``arch``) is missing, unknown or given for the other init, or
+            ``dtype`` is unknown.
     """
+    if isinstance(dtype, str):
+        if dtype not in DTYPES:
+            raise ValueError(f"dtype must be one of {sorted(DTYPES)}, got {dtype!r}")
+        dtype = DTYPES[dtype]
     if init == "pretrained":
         if arch is not None or id not in FOUNDATION_MODELS:
             raise ValueError(
                 f"init=pretrained takes an id in {sorted(FOUNDATION_MODELS)} and no arch, "
                 f"got id={id!r}, arch={arch!r}"
             )
-        model = load_backbone(id)
+        model = load_backbone(id, dtype)
     elif init == "scratch":
         if id is not None or arch not in ARCHS:
             raise ValueError(
@@ -55,7 +69,7 @@ def build_backbone(
             image_size=224,
             layerscale_value=1e-5,
         )
-        model = Dinov2Model(config)
+        model = Dinov2Model(config).to(dtype)
     else:
         raise ValueError(f"init must be 'pretrained' or 'scratch', got {init!r}")
     if grad_checkpointing:
