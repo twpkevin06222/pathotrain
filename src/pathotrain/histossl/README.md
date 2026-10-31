@@ -5,7 +5,7 @@
 
 Self-supervised learning on pathology tiles: continued pretraining of Midnight
 (teacher_jepa, dinov2) and LeJEPA from scratch. Work in progress: teacher_jepa
-trains; dinov2 and lejepa are planned (the config registry already knows their
+and dinov2 train; lejepa is planned (the config registry already knows its
 rules). Needs the `histossl` extra for LoRA:
 
 ```bash
@@ -75,6 +75,32 @@ the teacher is the student with its adapters off, so Midnight is held once.
   (LoRA merged), e.g. for the probe or `pathotrain.segmentation`.
 - `data.samples_per_epoch` draws that many tiles per epoch (with replacement);
   `data.val.max_tiles` caps validation to evenly spaced tiles.
+
+## Training: dinov2
+
+```bash
+python -m pathotrain.histossl.train config.yaml   # start from dinov2.example.yaml
+```
+
+Continued DINOv2 pretraining (Oquab et al. 2023) of Midnight: an EMA teacher
+sees the 2 global crops of each tile, the student those (iBOT-masked) and 8
+local crops. Losses, weighted as DINOv2: DINO (CLS prototype scores of every
+view against the teacher's of each other global view), iBOT (patch scores at
+masked patches) and KoLeo (spread of the global CLS tokens). Teacher targets
+are Sinkhorn-Knopp centred. The head, centring and KoLeo are adapted from
+facebookresearch/dinov2 (Apache-2.0).
+
+- Midnight has no DINO heads, so they start from scratch: their last layer is
+  held for `freeze_last_layer_epochs` (1), and `head_warmup_epochs` can train
+  the heads alone first.
+- Schedules: teacher momentum cosine 0.994 -> 1, teacher temperature 0.04 ->
+  0.07 over `teacher_temp_warmup_epochs`, weight decay cosine 0.04 -> 0.2. The
+  step count is saved with the teacher, so they resume where they stopped.
+- The EMA covers the trained weights (LoRA adapters or last blocks, and the
+  heads). The probe and `load_backbone` use the teacher, which DINOv2 evaluates
+  and releases.
+- Validation's `val/loss` uses each tile and its mirror image as the two global
+  views, with fixed masks.
 
 ## Linear probe and kNN
 

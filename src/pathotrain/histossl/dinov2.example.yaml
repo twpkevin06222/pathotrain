@@ -1,0 +1,76 @@
+# Experiment config for `python -m pathotrain.histossl.train config.yaml`.
+# dinov2: continued DINOv2-style pretraining of Midnight-12k (LoRA) with an EMA
+# teacher, DINO + iBOT + KoLeo losses on 2 global and 8 local crops. Copy it, set
+# the paths under `data` and `eval`. Values shown are the defaults unless marked
+# "example".
+
+name: dinov2_01             # MLflow experiment name
+seed: 0
+output_dir: runs/dinov2_01
+# mlflow_db: ~/project/mlflow.db
+
+method:
+  name: dinov2
+  prototypes: 65536         # DINO / iBOT head outputs
+  hidden_dim: 2048
+  bottleneck_dim: 256
+  separate_ibot_head: false # true: patches get their own head
+  student_temp: 0.1
+  teacher_temp: [0.04, 0.07]
+  teacher_temp_warmup_epochs: 1
+  dino_weight: 1.0
+  ibot_weight: 1.0
+  koleo_weight: 0.1
+  freeze_last_layer_epochs: 1  # heads start from scratch: hold their last layer first
+  head_warmup_epochs: 0        # > 0: train only the heads first, backbone frozen
+backbone:
+  init: pretrained
+  id: midnight-12k
+  grad_checkpointing: true
+adaptation:
+  type: lora                # or last_n (with n: 4), full
+  rank: 16
+  targets: [q_proj, v_proj]
+teacher:
+  type: ema
+  momentum: [0.994, 1.0]    # cosine over the run
+masking:                    # iBOT masks on the student's global crops
+  type: block
+  ratio: [0.1, 0.5]
+  p: 0.5                    # share of global crops masked
+
+task:
+  lr: 1.0e-4
+  weight_decay: [0.04, 0.2] # cosine over the run
+  warmup_epochs: 1
+trainer:
+  max_epochs: 10
+  precision: bf16-mixed
+  grad_clip: 3.0
+loader:
+  batch_size: 32            # x (2 global + 8 local) views
+  num_workers: 8
+
+data:
+  train:
+    slides: [data/train/slides]               # example; or tiles: [dir, ...]
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+  val:
+    slides: [data/val/slides]                 # example
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+    max_tiles: 1024
+  samples_per_epoch: 32000                    # example
+  crops:
+    global_crops: 2
+    local_crops: 8
+    global_size: 224
+    local_size: 98
+    global_scale: [0.32, 1.0]
+    local_scale: [0.05, 0.32]
+  augmentation: {hed: 0.05, hsv: 0.05, blur: 0.5, jpeg: 0.0}
+
+# The probe scores the EMA teacher, as DINOv2 evaluates and releases it.
+eval:
+  train: mhist/train.csv    # example
+  test: mhist/test.csv
+  every: 1

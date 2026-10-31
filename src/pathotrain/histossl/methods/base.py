@@ -15,13 +15,16 @@ from pathotrain.histossl.adaptation import param_groups
 class SSLTask(Task):
     """A self-supervised task. ``model`` holds every trainable module (it is what
     Fabric wraps for DDP) and has a ``backbone`` attribute, the encoder being
-    trained; subclasses give ``_loss(images, generator)``.
+    trained; subclasses give ``_losses(batch, generator)``, a dict with the total
+    ``"loss"`` and any parts to log. :attr:`encoder` is what the probe scores and
+    :func:`~pathotrain.histossl.train.load_backbone` returns (the student's
+    backbone unless a method says otherwise, e.g. DINOv2's EMA teacher).
 
     A training batch is the ``{"global": (G, B, 3, H, W), ...}`` dict of
     :func:`pathotrain.dataloader.multicrop_collate`, or a ``(B, 3, H, W)`` tensor;
     validation batches are tensors. Validation reports ``val/loss`` on held-out
     tiles, with randomness (e.g. masks) fixed per batch so epochs compare. Every
-    ``probe_every`` validations it also adds ``probe(backbone)``'s metrics (e.g.
+    ``probe_every`` validations it also adds ``probe(encoder)``'s metrics (e.g.
     :func:`pathotrain.histossl.eval.evaluate_features`'s ``probe/*`` and ``knn/*``).
 
     The optimizer is AdamW over the trainable parameters (see
@@ -53,7 +56,11 @@ class SSLTask(Task):
         self._val_batches = 0
         self._validations = 0
 
-    def _loss(self, images: Tensor, generator: torch.Generator | None) -> Tensor:
+    @property
+    def encoder(self) -> nn.Module:
+        return self.backbone
+
+    def _losses(self, batch, generator: torch.Generator | None) -> dict[str, Tensor]:
         raise NotImplementedError
 
     @staticmethod
@@ -62,13 +69,13 @@ class SSLTask(Task):
         return batch["global"].flatten(0, 1) if isinstance(batch, dict) else batch
 
     def training_step(self, batch) -> tuple[Tensor, dict[str, Tensor]]:
-        loss = self._loss(self._images(batch), None)
-        return loss, {"loss": loss.detach()}
+        losses = self._losses(batch, None)
+        return losses["loss"], {k: v.detach() for k, v in losses.items()}
 
     def validation_step(self, batch) -> None:
-        images = self._images(batch)
         generator = torch.Generator().manual_seed(self.seed + self._val_batches)
-        self.val_loss.update(self._loss(images, generator), len(images))
+        loss = self._losses(batch, generator)["loss"]
+        self.val_loss.update(loss, len(self._images(batch)))
         self._val_batches += 1
 
     def compute_metrics(self) -> dict[str, float]:
@@ -77,7 +84,7 @@ class SSLTask(Task):
         self._val_batches = 0
         self._validations += 1
         if self.probe is not None and self._validations % self.probe_every == 0:
-            metrics.update(self.probe(self.backbone))
+            metrics.update(self.probe(self.encoder))
         return metrics
 
     def configure_optimizers(
