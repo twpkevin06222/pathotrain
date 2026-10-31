@@ -85,6 +85,9 @@ python -m pathotrain.pathogen.eval runs/ldm01/checkpoints/best.ckpt --split val 
   `data`, `loader` and `trainer` too, unless `--config` gives them. Tiles are
   prepared as for validation (`data.crop` centre crop). Runs on one device.
 - `--steps` sets the sampling steps (default the task's `sample_steps`).
+- With `mlflow_db` in the config (the checkpoint's or `--config`'s) or
+  `--mlflow-db ~/project/mlflow.db`, the metrics are also logged there as a run
+  `eval-<split>` of the experiment, next to its training run.
 
 ### Translation
 

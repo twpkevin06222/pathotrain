@@ -8,6 +8,9 @@ config. So do ``data``, ``loader`` and ``trainer``, unless ``--config`` names a
 YAML with those sections, e.g. the experiment config with a ``test`` split added
 after training. Runs on one device and prints the metrics as JSON, keyed
 ``<split>/...`` (``test/miou``, ``test/iou_<class>``, ``test/loss``).
+With ``mlflow_db`` in the config (the checkpoint's, or ``--config``'s) or
+``--mlflow-db``, the metrics are also logged to that MLflow store as a run
+``eval-<split>`` of the experiment, with the checkpoint path as a param.
 
 Report test metrics: ``best.ckpt`` was chosen on ``val``, so its val score is
 optimistic. Metrics are per tile; overlapping tiles count shared pixels twice.
@@ -23,16 +26,20 @@ from pathotrain.engine import load_config
 from pathotrain.experiment import normalisation
 from pathotrain.segmentation import SegmentationTask, train
 
-OVERRIDES = ("data", "loader", "trainer")
+OVERRIDES = ("data", "loader", "trainer", "mlflow_db")
 
 
 def evaluate(
-    checkpoint: str | Path, split: str = "test", config: dict | None = None
+    checkpoint: str | Path,
+    split: str = "test",
+    config: dict | None = None,
+    mlflow_db: str | Path | None = None,
 ) -> dict[str, float]:
     """Score ``checkpoint`` on ``data[split]`` and return the metrics keyed ``<split>/...``.
 
-    ``config``: an experiment config whose ``data``, ``loader`` and ``trainer``
-    sections replace the checkpoint's.
+    ``config``: an experiment config whose ``data``, ``loader``, ``trainer`` and
+    ``mlflow_db`` replace the checkpoint's. ``mlflow_db``: log the metrics to this
+    MLflow store (default the config's ``mlflow_db``; neither logs nothing).
     """
     model, cfg = train.load_model(checkpoint)
     if config is not None:
@@ -45,7 +52,9 @@ def evaluate(
     task = SegmentationTask(
         model, cfg["model"]["num_classes"], loss=train.build_loss(cfg), **cfg.get("task", {})
     )
-    return experiment.evaluate(cfg, task, dataset, split)
+    metrics = experiment.evaluate(cfg, task, dataset, split)
+    experiment.log_eval(cfg, checkpoint, split, metrics, mlflow_db)
+    return metrics
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -53,9 +62,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("checkpoint", help="best.ckpt or last.ckpt written by train")
     parser.add_argument("--split", default="test", help="data split to score (default: test)")
     parser.add_argument("--config", help="YAML whose data, loader and trainer sections apply")
+    parser.add_argument("--mlflow-db", help="also log the metrics to this MLflow SQLite file")
     args = parser.parse_args(argv)
     config = load_config(args.config) if args.config else None
-    print(json.dumps(evaluate(args.checkpoint, args.split, config), indent=2))
+    print(json.dumps(evaluate(args.checkpoint, args.split, config, args.mlflow_db), indent=2))
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from pathotrain.engine import (
     dump_config,
     flatten,
 )
+from pathotrain.engine.logger import sqlite_store
 from pathotrain.pathofm import MIDNIGHT_MEAN, MIDNIGHT_STD
 
 NORMALISATION = {
@@ -86,7 +87,9 @@ def fit(
     **loader_kwargs,
 ) -> dict[str, float]:
     """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping`` and
-    ``loader`` sections of ``cfg`` say, logging to MLflow and CSV.
+    ``loader`` sections of ``cfg`` say, logging to MLflow and CSV. MLflow writes
+    to ``cfg["mlflow_db"]`` (artifacts in ``mlruns/`` beside it) when set, else to
+    ``MLFLOW_TRACKING_URI``.
 
     ``monitor`` is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
@@ -97,7 +100,8 @@ def fit(
     callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **checkpoint)]
     if "early_stopping" in cfg:
         callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
-    mlflow_logger = MLflowLogger(experiment=cfg["name"])
+    store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
+    mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
     mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
     trainer = Trainer(
         TrainerConfig(**{**(trainer_defaults or {}), **cfg.get("trainer", {})}),
@@ -134,6 +138,26 @@ def evaluate(
         task, DataLoader(dataset, **_loader_kwargs(cfg, loader_kwargs))
     )
     return {f"{split}/{k.removeprefix('val/')}": v for k, v in metrics.items()}
+
+
+def log_eval(
+    cfg: dict,
+    checkpoint: str | Path,
+    split: str,
+    metrics: dict[str, float],
+    mlflow_db: str | Path | None = None,
+    **params,
+) -> None:
+    """Log eval ``metrics`` to ``mlflow_db`` (default ``cfg["mlflow_db"]``; neither
+    logs nothing) as a run ``eval-<split>`` of the experiment, with the checkpoint
+    path and ``params`` as params."""
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    if mlflow_db is None:
+        return
+    run = MLflowLogger(cfg["name"], f"eval-{split}", **sqlite_store(mlflow_db))
+    run.log_hyperparams({"checkpoint": str(Path(checkpoint).resolve()), **params})
+    run.log_metrics(metrics)
+    run.finalize("success")
 
 
 def _loader_kwargs(cfg: dict, defaults: dict) -> dict:

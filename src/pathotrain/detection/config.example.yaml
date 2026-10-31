@@ -5,6 +5,7 @@
 name: det01                 # MLflow experiment name
 seed: 0
 output_dir: runs/det01      # config.yaml, checkpoints/ and logs/; one per experiment
+# mlflow_db: ~/project/mlflow.db  # optional: one MLflow store for all runs
 # Input normalisation: RF-DETR's DINOv2 backbone was trained on ImageNet statistics.
 mean: IMAGENET_MEAN
 std: IMAGENET_STD

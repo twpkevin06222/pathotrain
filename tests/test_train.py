@@ -51,6 +51,17 @@ def toy_data(monkeypatch):
     )
 
 
+def test_mlflow_db_keeps_runs_and_artifacts_beside_it(tmp_path, monkeypatch, toy_data):
+    (tmp_path / "elsewhere").mkdir()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    db = tmp_path / "project/mlflow.db"
+    train({**_cfg(tmp_path / "run"), "mlflow_db": str(db)})
+    client = mlflow.MlflowClient(f"sqlite:///{db}")
+    (run,) = client.search_runs([client.get_experiment_by_name("exp").experiment_id])
+    assert run.info.artifact_uri.startswith(str(tmp_path / "project/mlruns"))
+    assert not (tmp_path / "elsewhere/mlruns").exists()
+
+
 def test_train_from_config_and_rebuild_model_from_checkpoint(tmp_path, monkeypatch, toy_data):
     monkeypatch.chdir(tmp_path)
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
@@ -83,6 +94,10 @@ def test_evaluate_reproduces_the_last_validation(tmp_path, monkeypatch, toy_data
         evaluate(last)
     test = evaluate(last, config={"data": {**cfg["data"], "test": {}}})
     assert test == pytest.approx({k.replace("val/", "test/"): v for k, v in metrics.items()})
+    assert evaluate(last, "val", mlflow_db=tmp_path / "project/mlflow.db") == pytest.approx(metrics)
+    client = mlflow.MlflowClient(f"sqlite:///{tmp_path}/project/mlflow.db")
+    (run,) = client.search_runs([client.get_experiment_by_name(cfg["name"]).experiment_id])
+    assert run.info.run_name == "eval-val" and run.data.metrics == pytest.approx(metrics)
 
 
 def test_config_helpers_validate():

@@ -190,6 +190,15 @@ def test_sweep_checkpoints_each_trial_when_asked(tmp_path, tracking):
     ]
 
 
+def test_sweep_logs_to_mlflow_db(tmp_path, tracking):
+    db = tmp_path / "project/mlflow.db"
+    sweep(_objective, 1, "toy", mlflow_db=db)
+    client = mlflow.MlflowClient(f"sqlite:///{db}")
+    runs = client.search_runs([client.get_experiment_by_name("pathotrain").experiment_id])
+    assert sorted(r.info.run_name for r in runs) == ["toy", "trial-0"]
+    assert all(r.info.artifact_uri.startswith(str(tmp_path / "project/mlruns")) for r in runs)
+
+
 def test_config_round_trips_flattens_and_guards_existing_runs(tmp_path):
     cfg = {"name": "exp", "loss": {"name": "FocalLoss", "gamma": 2.0}, "classes": {"a b": 1}}
     path = dump_config(cfg, tmp_path / "run")

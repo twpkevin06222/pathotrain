@@ -127,6 +127,9 @@ python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --split val
   `loader` and `trainer` too, unless `--config` gives them.
 - Prints the metrics as JSON keyed by the split (`test/map`, `test/ap_<class>`,
   ...). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- With `mlflow_db` in the config (the checkpoint's or `--config`'s) or
+  `--mlflow-db ~/project/mlflow.db`, the metrics are also logged there as a run
+  `eval-<split>` of the experiment, next to its training run.
 - Scores are per tile: tile the split with `tile_overlap: 0` so no object counts twice.
 
 ### Inference

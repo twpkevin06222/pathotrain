@@ -5,6 +5,7 @@
 name: ldm01                 # MLflow experiment name
 seed: 0
 output_dir: runs/ldm01      # config.yaml, checkpoints/ and logs/; one per experiment
+# mlflow_db: ~/project/mlflow.db  # optional: one MLflow store for all runs
 
 # Latent diffusion: frozen VAE, UNet trained from scratch on [noisy target, source] latents.
 model:

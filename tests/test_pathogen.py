@@ -338,6 +338,13 @@ def test_evaluate_samples_every_tile_of_a_split(tmp_path, monkeypatch):
     fewer = score("val", steps=1)
     assert fewer["val/loss"] == pytest.approx(metrics["val/loss"])  # loss does not sample
 
+    db = tmp_path / "project/mlflow.db"
+    score("val", mlflow_db=db)
+    client = mlflow.MlflowClient(f"sqlite:///{db}")
+    (run,) = client.search_runs([client.get_experiment_by_name(cfg["name"]).experiment_id])
+    assert run.info.run_name == "eval-val" and run.data.params["checkpoint"] == str(last)
+    assert run.data.metrics == pytest.approx(metrics)
+
 
 def test_spread_first_puts_evenly_spaced_tiles_first():
     from pathotrain.pathogen.train import spread_first

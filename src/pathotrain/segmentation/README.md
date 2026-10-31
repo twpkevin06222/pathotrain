@@ -161,7 +161,10 @@ metrics = trainer.fit(
   `ModelCheckpoint("checkpoints", monitor="val/iou_tumor")`. `OptunaPruning`
   has no `mode`; it takes the direction from the study (`sweep(direction=...)`).
 - MLflow writes to `MLFLOW_TRACKING_URI`, e.g. `sqlite:///mlflow.db`. Browse it with
-  `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
+  `mlflow ui --backend-store-uri sqlite:///mlflow.db`. From a config, set
+  `mlflow_db: ~/project/mlflow.db` instead: every run then logs to that one
+  file (artifacts in `mlruns/` beside it), wherever it is launched from; browse
+  with `mlflow ui --backend-store-uri sqlite:///$HOME/project/mlflow.db`.
 
 ### From a config file
 
@@ -221,6 +224,9 @@ python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split 
   `loader` and `trainer` too, unless `--config` gives them.
 - Prints the metrics as JSON keyed by the split (`test/miou`, `test/iou_<class>`,
   `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
+- With `mlflow_db` in the config (the checkpoint's or `--config`'s) or
+  `--mlflow-db ~/project/mlflow.db`, the metrics are also logged there as a run
+  `eval-<split>` of the experiment, next to its training run.
 - Scores are per tile: with `tile_overlap`, shared pixels count more than once.
 
 ### Inference
@@ -360,6 +366,7 @@ study = sweep(
     storage="sqlite:///sweep.db",
     sampler=optuna.samplers.GPSampler(),  # Gaussian-process BO; TPE by default
     csv_path="trials.csv",
+    mlflow_db="~/project/mlflow.db",  # optional, else MLFLOW_TRACKING_URI
 )
 ```
 

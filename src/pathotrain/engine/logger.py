@@ -11,12 +11,29 @@ from lightning_fabric.utilities.rank_zero import rank_zero_only
 _STATUS = {"success": "FINISHED", "pruned": "KILLED"}
 
 
+def sqlite_store(db: str | Path) -> dict[str, str]:
+    """``tracking_uri`` and ``artifact_location`` for one SQLite MLflow store at
+    ``db``, with artifacts in ``mlruns/`` beside it, wherever a run is launched from."""
+    db = Path(db).expanduser().resolve()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    return {"tracking_uri": f"sqlite:///{db}", "artifact_location": str(db.parent / "mlruns")}
+
+
+def set_experiment(experiment: str, artifact_location: str | None = None) -> None:
+    """Make ``experiment`` active, creating it with ``artifact_location`` if new."""
+    if artifact_location is not None and mlflow.get_experiment_by_name(experiment) is None:
+        mlflow.create_experiment(experiment, artifact_location)
+    mlflow.set_experiment(experiment)
+
+
 class MLflowLogger(Logger):
     """Fabric logger writing to an MLflow run, from rank 0 only.
 
     The run starts on the first log call. If another run is active (e.g. the
     parent run of :func:`pathotrain.engine.sweep`), it becomes a child of it.
     The tracking server comes from ``tracking_uri`` or ``MLFLOW_TRACKING_URI``.
+    ``artifact_location`` is where a new experiment stores its artifacts (MLflow's
+    default is ``./mlruns`` of the working directory).
     """
 
     def __init__(
@@ -24,10 +41,12 @@ class MLflowLogger(Logger):
         experiment: str = "pathotrain",
         run_name: str | None = None,
         tracking_uri: str | None = None,
+        artifact_location: str | None = None,
     ) -> None:
         self.experiment = experiment
         self.run_name = run_name
         self.tracking_uri = tracking_uri
+        self.artifact_location = artifact_location
         self.run_id: str | None = None
 
     @property
@@ -45,7 +64,7 @@ class MLflowLogger(Logger):
             mlflow.set_tracking_uri(self.tracking_uri)
         parent = mlflow.active_run()
         if parent is None:
-            mlflow.set_experiment(self.experiment)
+            set_experiment(self.experiment, self.artifact_location)
         run = mlflow.start_run(run_name=self.run_name, nested=parent is not None)
         self.run_id = run.info.run_id
 
