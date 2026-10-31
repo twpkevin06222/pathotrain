@@ -1,6 +1,7 @@
 """Datasets that feed whole-slide image tiles to PyTorch."""
 
 from pathotrain.dataloader.base import find_pairs
+from pathotrain.dataloader.classification import ClassTileDataset
 from pathotrain.dataloader.detection import (
     DetectionDataset,
     DetectionTileFolderDataset,
@@ -13,16 +14,27 @@ from pathotrain.dataloader.segmentation import (
     SegmentationTileFolderDataset,
     export_segmentation_tiles,
 )
+from pathotrain.dataloader.unlabelled import (
+    MultiCropTransform,
+    UnlabelledSlideDataset,
+    UnlabelledTileFolderDataset,
+    multicrop_collate,
+)
 
 __all__ = [
+    "ClassTileDataset",
     "DetectionDataset",
     "DetectionTileFolderDataset",
+    "MultiCropTransform",
     "PairedTileDataset",
     "SegmentationDataset",
     "SegmentationTileFolderDataset",
+    "UnlabelledSlideDataset",
+    "UnlabelledTileFolderDataset",
     "export_detection_tiles",
     "export_registered_tiles",
     "export_segmentation_tiles",
     "find_pairs",
+    "multicrop_collate",
     "paired_transform",
 ]
