@@ -160,6 +160,12 @@ metrics = trainer.fit(
   `monitor=` (and `mode="min"` for losses) to change it, e.g.
   `ModelCheckpoint("checkpoints", monitor="val/iou_tumor")`. `OptunaPruning`
   has no `mode`; it takes the direction from the study (`sweep(direction=...)`).
+- `TrainerConfig(val_every=5)` validates every 5 epochs and after the last one
+  (for slow validation); the callbacks skip validations without their
+  `monitor`, and `ModelCheckpoint` warns at the end if it never saw it.
+- `ModelCheckpoint(..., extra={"provenance": {...}})` stores more entries in
+  both checkpoints beside `config` (e.g. a git commit, which may differ on
+  resume while the config may not).
 - MLflow writes to `MLFLOW_TRACKING_URI`, e.g. `sqlite:///mlflow.db`. Browse it with
   `mlflow ui --backend-store-uri sqlite:///mlflow.db`. From a config, set
   `mlflow_db: ~/project/mlflow.db` instead: every run then logs to that one
@@ -278,6 +284,11 @@ python -m pathotrain.segmentation.export runs/exp01/checkpoints/best.ckpt model.
   2 GB (e.g. Midnight encoders) go to `model.onnx.data`; keep it beside the graph.
 - Weights are fp32. Convert to fp16 or quantise to int8 from this file, then
   check the result with the same tiles.
+- `--register NAME` also logs the graph to MLflow (`--mlflow-db`, else the
+  config's `mlflow_db`) as a run `export` and registers it as a new version of
+  the model `NAME`, with the metadata above. Load a version with
+  `mlflow.onnx.load_model("models:/NAME/2")`, or set an alias such as `@champion`
+  on it in the MLflow UI and load `models:/NAME@champion`.
 
 ### Checkpoints
 

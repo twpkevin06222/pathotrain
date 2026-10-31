@@ -171,3 +171,18 @@ def test_export_writes_an_onnx_graph_with_its_metadata(tmp_path):
     assert meta["class_map"] == {"tumor": 1} and meta["class_names"] == ["0", "1"]
     (logits,) = session.run(None, {"image": np.zeros((3, 3, 64, 64), np.float32)})
     assert logits.shape == (3, 2, 64, 64)
+
+    db = tmp_path / "project/mlflow.db"
+    for version in (1, 2):  # each export registers a new version
+        export(tmp_path / "m.ckpt", tmp_path / "m.onnx", register="seg", mlflow_db=db)
+    import mlflow.onnx
+
+    mlflow.set_tracking_uri(f"sqlite:///{db}")
+    client = mlflow.MlflowClient()
+    assert [v.version for v in client.search_model_versions("name='seg'")] == [2, 1]
+    model = mlflow.onnx.load_model("models:/seg/2")
+    assert [i.name for i in model.graph.input] == ["image"]
+    run = client.get_run(client.get_model_version("seg", "2").run_id)
+    assert run.info.run_name == "export" and run.data.params["checkpoint"] == str(
+        tmp_path / "m.ckpt"
+    )

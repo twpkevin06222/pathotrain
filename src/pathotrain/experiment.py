@@ -11,7 +11,7 @@ import torch
 from lightning_fabric import seed_everything
 from loguru import logger
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 from patchology import TilingConfig
 from pathotrain.dataloader.augmentation import IMAGENET_MEAN, IMAGENET_STD
@@ -84,6 +84,8 @@ def fit(
     resume: str | Path | None = None,
     monitor: str = "val/miou",
     trainer_defaults: dict | None = None,
+    checkpoint_extra: dict | None = None,
+    train_sampler: Sampler | None = None,
     **loader_kwargs,
 ) -> dict[str, float]:
     """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping`` and
@@ -93,11 +95,16 @@ def fit(
 
     ``monitor`` is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
-    (e.g. ``collate_fn``); the config overrides each.
+    (e.g. ``collate_fn``); the config overrides each. ``checkpoint_extra`` is stored
+    in both checkpoints beside the config (see :class:`ModelCheckpoint`).
+    ``train_sampler`` replaces shuffling, e.g. ``RandomSampler(train_set,
+    num_samples=n)`` for epochs of ``n`` tiles.
     """
     out = Path(cfg["output_dir"])
     checkpoint = {"monitor": monitor, **cfg.get("checkpoint", {})}
-    callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **checkpoint)]
+    callbacks = [
+        ModelCheckpoint(out / "checkpoints", config=cfg, extra=checkpoint_extra, **checkpoint)
+    ]
     if "early_stopping" in cfg:
         callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
     store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
@@ -116,7 +123,7 @@ def fit(
         # are not both held in RAM for the whole run.
         DataLoader(
             train_set,
-            shuffle=True,
+            **({"shuffle": True} if train_sampler is None else {"sampler": train_sampler}),
             **{"persistent_workers": loader.get("num_workers", 0) > 0, **loader},
         ),
         val_loader,
@@ -158,6 +165,38 @@ def log_eval(
     run.log_hyperparams({"checkpoint": str(Path(checkpoint).resolve()), **params})
     run.log_metrics(metrics)
     run.finalize("success")
+
+
+def register_onnx(
+    path: str | Path,
+    name: str,
+    cfg: dict,
+    checkpoint: str | Path,
+    mlflow_db: str | Path | None = None,
+) -> int:
+    """Log the ONNX graph at ``path`` (written by :func:`export_onnx`) to MLflow as
+    the model of a run ``export`` of the experiment, register it as a new version
+    of the registered model ``name`` and return the version number. The store is
+    ``mlflow_db`` (default ``cfg["mlflow_db"]``, else ``MLFLOW_TRACKING_URI``); the
+    graph's ``pathotrain`` metadata becomes the model's metadata."""
+    import mlflow.onnx
+    import onnx
+
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    run = MLflowLogger(cfg["name"], "export", **(sqlite_store(mlflow_db) if mlflow_db else {}))
+    run.log_hyperparams({"checkpoint": str(Path(checkpoint).resolve())})  # starts the run
+    graph = onnx.load(str(path))
+    metadata = {p.key: p.value for p in graph.metadata_props}
+    info = mlflow.onnx.log_model(
+        graph,
+        name="model",
+        registered_model_name=name,
+        metadata=json.loads(metadata.get("pathotrain", "{}")),
+    )
+    run.finalize("success")
+    version = int(info.registered_model_version)
+    logger.info(f"registered {path} as {name} version {version}")
+    return version
 
 
 def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
@@ -215,11 +254,14 @@ def export_onnx(
     metadata: dict,
     opset: int = 17,
     atol: float = 1e-3,
+    inputs: dict[str, tuple[int, ...]] | None = None,
 ) -> Path:
     """Write ``model`` (images -> ``output_names`` tensors) to ``path`` as fp32 ONNX
     with a dynamic batch, store ``metadata`` as JSON under the ``pathotrain`` metadata
     key, and check ONNX Runtime against PyTorch on random images. Weights over 2 GB
-    go to ``<path>.data``, which must stay beside the graph.
+    go to ``<path>.data``, which must stay beside the graph. ``inputs``: the graph's
+    inputs and their shapes without the batch, in ``model``'s argument order
+    (default ``image`` of ``(3, size, size)``).
 
     Raises:
         AssertionError: An output differs from PyTorch by more than ``atol`` (relative
@@ -235,16 +277,17 @@ def export_onnx(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     model = model.eval().cpu().float()
-    names = ["image", *output_names]
+    inputs = inputs or {"image": (3, size, size)}
+    names = [*inputs, *output_names]
     # Over 2 GB the exporter writes one file per weight; trace into a scratch folder and
     # save the weights as a single <name>.data beside the graph instead.
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp, torch.no_grad():
         traced = Path(tmp) / path.name
         torch.onnx.export(
             model,
-            (torch.randn(1, 3, size, size),),
+            tuple(torch.randn(1, *shape) for shape in inputs.values()),
             str(traced),
-            input_names=["image"],
+            input_names=list(inputs),
             output_names=output_names,
             dynamic_axes={n: {0: "batch"} for n in names},
             opset_version=opset,
@@ -262,12 +305,13 @@ def export_onnx(
         location=f"{path.name}.data",
     )
 
-    images = torch.randn(2, 3, size, size)  # another batch size than traced: checks the axis
+    # Another batch size than traced: checks the axis.
+    feeds = {name: torch.randn(2, *shape) for name, shape in inputs.items()}
     with torch.no_grad():
-        expected = model(images)
+        expected = model(*feeds.values())
     expected = [expected] if isinstance(expected, torch.Tensor) else list(expected)
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-    actual = session.run(output_names, {"image": images.numpy()})
+    actual = session.run(output_names, {k: v.numpy() for k, v in feeds.items()})
     for name, want, got in zip(output_names, expected, actual, strict=True):
         want = want.numpy()
         diff = float(np.abs(want.astype(np.float64) - got).max()) if want.size else 0.0

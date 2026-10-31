@@ -27,6 +27,10 @@ class Task(nn.Module):
         """Return the metrics accumulated since the last call, then reset them."""
         raise NotImplementedError
 
+    def on_before_optimizer_step(self) -> None:
+        """Called after the gradients of an optimizer step are complete, before they
+        are clipped and applied, e.g. to zero the gradients of a frozen head."""
+
     def on_optimizer_step(self) -> None:
         """Called after every optimizer step, e.g. to update an EMA of the weights."""
 

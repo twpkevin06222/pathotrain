@@ -1,10 +1,13 @@
 """Trainer callbacks. Each runs on every rank; validation metrics are already
-synced across ranks, so every rank takes the same decision."""
+synced across ranks, so every rank takes the same decision. A validation without
+a callback's ``monitor`` (e.g. a metric the task reports only every few epochs)
+is skipped by it."""
 
 import math
 from pathlib import Path
 
 import optuna
+from loguru import logger
 
 
 def _improved(value: float, best: float | None, mode: str) -> bool:
@@ -23,7 +26,8 @@ class ModelCheckpoint:
     logger; with ``log_artifact=True`` ``best.ckpt`` is also uploaded to loggers
     that store files (:class:`MLflowLogger`). A ``config`` (e.g. the experiment's
     YAML as a dict) is stored in both files under ``"config"``, so a checkpoint
-    says how to rebuild its model.
+    says how to rebuild its model; ``extra`` entries (e.g. ``{"provenance": ...}``,
+    which may change on resume, unlike the config) are stored beside it.
     """
 
     def __init__(
@@ -33,9 +37,10 @@ class ModelCheckpoint:
         mode: str = "max",
         log_artifact: bool = False,
         config: dict | None = None,
+        extra: dict | None = None,
     ) -> None:
         self.dirpath = Path(dirpath)
-        self.extra = {} if config is None else {"config": config}
+        self.extra = {**(extra or {}), **({} if config is None else {"config": config})}
         self.monitor = monitor
         self.mode = mode
         self.log_artifact = log_artifact
@@ -47,7 +52,7 @@ class ModelCheckpoint:
         return self.dirpath / "best.ckpt"
 
     def on_validation_end(self, trainer, metrics: dict[str, float]) -> None:
-        if _improved(metrics[self.monitor], self.best, self.mode):
+        if self.monitor in metrics and _improved(metrics[self.monitor], self.best, self.mode):
             self.best, self.best_epoch = metrics[self.monitor], trainer.epoch
             trainer.save(
                 self.best_path,
@@ -63,6 +68,7 @@ class ModelCheckpoint:
 
     def on_fit_end(self, trainer) -> None:
         if self.best is None:
+            logger.warning(f"{self.monitor} was never a validation metric; no best.ckpt written")
             return
         for lg in trainer.fabric.loggers:
             lg.log_metrics(
@@ -91,6 +97,8 @@ class EarlyStopping:
         self.bad = 0
 
     def on_validation_end(self, trainer, metrics: dict[str, float]) -> None:
+        if self.monitor not in metrics:
+            return
         if _improved(metrics[self.monitor], self.best, self.mode):
             self.best, self.bad = metrics[self.monitor], 0
             return
@@ -115,6 +123,8 @@ class OptunaPruning:
     def on_validation_end(self, trainer, metrics: dict[str, float]) -> None:
         # shortcut: single-process trials only; with DDP every rank would report to the
         # trial, upgrade by reporting on rank 0 and broadcasting the decision.
+        if self.monitor not in metrics:
+            return
         self.trial.report(metrics[self.monitor], trainer.epoch)
         if self.trial.should_prune():
             for lg in trainer.fabric.loggers:
