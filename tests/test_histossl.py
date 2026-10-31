@@ -104,6 +104,22 @@ def test_lora_trains_adapters_and_disables_to_the_base():
         apply_adaptation(_tiny(), "lora", rank=0)
 
 
+def test_backbone_carries_its_preprocessing(tmp_path):
+    pytest.importorskip("peft")
+    from pathotrain.histossl import preprocessing
+    from pathotrain.histossl.adaptation import merge_and_export
+
+    model = build_backbone("scratch", arch="vit_s14", grad_checkpointing=False, input_size=112)
+    want = {"input_size": 112, "mean": [0.5] * 3, "std": [0.5] * 3}
+    assert preprocessing(model) == want
+    lora = apply_adaptation(model, "lora", rank=2, targets=["q_proj"])
+    assert preprocessing(lora) == want  # through the peft wrapper
+    reloaded = Dinov2Model.from_pretrained(merge_and_export(lora, tmp_path / "out"))
+    assert preprocessing(reloaded) == want and reloaded.config.image_size == 224
+    with pytest.raises(ValueError, match="no preprocessing"):
+        preprocessing(_tiny())
+
+
 def test_backbone_dtype_keeps_lora_adapters_in_fp32():
     pytest.importorskip("peft")
     model = build_backbone("scratch", arch="vit_s14", dtype="bfloat16")

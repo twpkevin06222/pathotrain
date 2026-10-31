@@ -12,8 +12,9 @@ experiment config. Load it anywhere with transformers alone::
     from transformers import Dinov2Model
     encoder = Dinov2Model.from_pretrained("exported/jepa01")
 
-Preprocess tiles as ``pathotrain.json`` says: ``provenance.input_size`` px,
-``provenance.normalisation`` mean and std on ``[0, 1]`` pixels.
+Preprocess tiles as the model's config says (``encoder.config.preprocessing``, or
+:func:`pathotrain.histossl.backbones.preprocessing`): ``input_size`` px, ``mean``
+and ``std`` on ``[0, 1]`` pixels; ``pathotrain.json`` repeats them.
 """
 
 import argparse

@@ -3,11 +3,13 @@
     python -m pathotrain.histossl.eval.linear_probe midnight-12k \\
         --train mhist/train.csv --test mhist/test.csv
     python -m pathotrain.histossl.eval.linear_probe runs/jepa01/checkpoints/best.ckpt ...
+    python -m pathotrain.histossl.eval.linear_probe exported/jepa01 ...  # histossl.export
 
 ``--train`` and ``--test`` are class folders (``root/<class>/*.png``) or ``path,label``
 CSVs (paths relative to the CSV, or to ``--root``), read with
 :class:`pathotrain.dataloader.ClassTileDataset`. Tiles are resized and centre
-cropped to 224 px and normalised as the backbone expects; the embedding is
+cropped to the backbone's input size and normalised as it expects (its stored
+:func:`~pathotrain.histossl.backbones.preprocessing`); the embedding is
 the CLS token concatenated with the mean patch token
 (:func:`pathotrain.pathofm.classification_embedding`). Prints the metrics as JSON.
 
@@ -37,9 +39,10 @@ from torchmetrics.functional.classification import (
     multiclass_recall,
 )
 from torchvision.transforms import v2
+from transformers import Dinov2Model
 
 from pathotrain.dataloader import ClassTileDataset
-from pathotrain.histossl.backbones import build_backbone, normalisation
+from pathotrain.histossl.backbones import build_backbone, preprocessing
 from pathotrain.pathofm import classification_embedding
 
 WEIGHT_DECAYS = (1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)
@@ -194,7 +197,9 @@ def _dataset(spec: str, root: str | None, transform, class_names=None) -> ClassT
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "backbone", help="a pathotrain.pathofm model (e.g. midnight-12k) or a histossl .ckpt"
+        "backbone",
+        help="a pathotrain.pathofm model (e.g. midnight-12k), a histossl .ckpt, "
+        "or a folder written by pathotrain.histossl.export",
     )
     parser.add_argument("--train", required=True, help="class folder root or path,label CSV")
     parser.add_argument("--test", required=True, help="class folder root or path,label CSV")
@@ -206,14 +211,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.backbone.endswith(".ckpt"):
         from pathotrain.histossl.train import load_backbone
 
-        model, cfg = load_backbone(args.backbone)
-        bb = cfg["backbone"]
-        mean_std = normalisation(bb["init"], bb.get("id"))
+        model, _ = load_backbone(args.backbone)
+    elif Path(args.backbone).is_dir():
+        model = Dinov2Model.from_pretrained(args.backbone)
     else:
         model = build_backbone("pretrained", id=args.backbone, grad_checkpointing=False)
-        mean_std = normalisation("pretrained", args.backbone)
     model.to("cuda" if torch.cuda.is_available() else "cpu")
-    transform = probe_transform(*mean_std)
+    pp = preprocessing(model)  # what the backbone was trained on
+    transform = probe_transform(pp["mean"], pp["std"], pp["input_size"])
     train = _dataset(args.train, args.root, transform)
     test = _dataset(args.test, args.root, transform, train.class_names)
     metrics = evaluate_features(

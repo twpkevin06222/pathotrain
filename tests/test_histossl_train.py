@@ -7,13 +7,18 @@ from transformers import Dinov2Config, Dinov2Model
 pytest.importorskip("peft")
 
 from pathotrain.histossl import config as ssl_config
+from pathotrain.histossl import preprocessing
 from pathotrain.histossl.config import ConfigError, validate
 from pathotrain.histossl.methods import teacher_jepa
 from pathotrain.histossl.train import build_task, load_backbone, train
 
 
-def _tiny(init="pretrained", id=None, arch=None, grad_checkpointing=True, dtype="float32"):
+def _tiny(
+    init="pretrained", id=None, arch=None, grad_checkpointing=True, dtype="float32", input_size=224
+):
     """Stands in for Midnight: a 2-block Dinov2, the same weights on every call."""
+    from pathotrain.histossl.backbones import set_preprocessing
+
     torch.manual_seed(0)
     config = Dinov2Config(
         hidden_size=32,
@@ -26,7 +31,7 @@ def _tiny(init="pretrained", id=None, arch=None, grad_checkpointing=True, dtype=
     model = Dinov2Model(config).to(getattr(torch, dtype))
     if grad_checkpointing:
         model.gradient_checkpointing_enable({"use_reentrant": False})
-    return model
+    return set_preprocessing(model, (0.5,) * 3, (0.5,) * 3, input_size)
 
 
 def _images(d, n, colour=None, seed=0):
@@ -180,6 +185,21 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     exported = Dinov2Model.from_pretrained(out).eval()
     with torch.no_grad():
         assert torch.allclose(exported(pixel_values=x).last_hidden_state, want, atol=1e-5)
+    # The training input size travels with the weights, so the probe CLI needs no config.
+    assert preprocessing(exported) == {"input_size": 56, "mean": [0.5] * 3, "std": [0.5] * 3}
+
+    import contextlib
+    import io
+
+    from pathotrain.histossl.eval.linear_probe import main as probe_main
+
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        probe_main(
+            [str(out), "--train", cfg["eval"]["train"], "--test", cfg["eval"]["test"]]
+            + ["--num-workers", "0", "--k", "3"]
+        )
+    assert json.loads(printed.getvalue())["probe/acc"] == 1.0  # dark vs bright tiles
 
 
 def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
