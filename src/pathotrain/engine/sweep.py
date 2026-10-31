@@ -7,7 +7,7 @@ import mlflow
 import optuna
 
 from pathotrain.engine.callbacks import ModelCheckpoint, OptunaPruning
-from pathotrain.engine.logger import MLflowLogger
+from pathotrain.engine.logger import MLflowLogger, set_experiment, sqlite_store
 
 
 def sweep(
@@ -22,6 +22,7 @@ def sweep(
     experiment: str = "pathotrain",
     checkpoint_dir: str | Path | None = None,
     csv_path: str | Path | None = None,
+    mlflow_db: str | Path | None = None,
 ) -> optuna.Study:
     """Run ``n_trials`` of ``objective`` under one MLflow parent run per study.
 
@@ -44,8 +45,11 @@ def sweep(
             Gaussian-process Bayesian optimisation.
         csv_path: Rewrite this CSV after every trial, one row per trial of the
             study: number, state, value, duration and each hyperparameter.
+        mlflow_db: Log the study and its trials to this SQLite file (artifacts in
+            ``mlruns/`` beside it) instead of ``MLFLOW_TRACKING_URI``.
     """
     mode = "max" if direction == "maximize" else "min"
+    store = {} if mlflow_db is None else sqlite_store(mlflow_db)
 
     def run(trial: optuna.Trial) -> float:
         callbacks = [OptunaPruning(trial, monitor)]
@@ -53,7 +57,9 @@ def sweep(
             callbacks.append(
                 ModelCheckpoint(Path(checkpoint_dir) / f"trial-{trial.number}", monitor, mode)
             )
-        return objective(trial, callbacks, [MLflowLogger(experiment, f"trial-{trial.number}")])
+        return objective(
+            trial, callbacks, [MLflowLogger(experiment, f"trial-{trial.number}", **store)]
+        )
 
     study = optuna.create_study(
         study_name=study_name,
@@ -64,7 +70,9 @@ def sweep(
         load_if_exists=True,
     )
     on_trial_end = [] if csv_path is None else [lambda s, _: write_trials_csv(s, csv_path)]
-    mlflow.set_experiment(experiment)
+    if store:
+        mlflow.set_tracking_uri(store["tracking_uri"])
+    set_experiment(experiment, store.get("artifact_location"))
     with mlflow.start_run(run_name=study_name):
         study.optimize(run, n_trials=n_trials, callbacks=on_trial_end)
         if any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials):

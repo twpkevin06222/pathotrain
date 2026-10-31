@@ -26,6 +26,7 @@ from pathotrain.engine import (
     dump_config,
     flatten,
 )
+from pathotrain.engine.logger import sqlite_store
 from pathotrain.pathofm import MIDNIGHT_MEAN, MIDNIGHT_STD
 
 NORMALISATION = {
@@ -99,11 +100,7 @@ def fit(
     callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, **checkpoint)]
     if "early_stopping" in cfg:
         callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
-    store = {}
-    if "mlflow_db" in cfg:  # one store for every run, wherever they are launched from
-        db = Path(cfg["mlflow_db"]).expanduser().resolve()
-        db.parent.mkdir(parents=True, exist_ok=True)
-        store = {"tracking_uri": f"sqlite:///{db}", "artifact_location": str(db.parent / "mlruns")}
+    store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
     mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
     mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
     trainer = Trainer(

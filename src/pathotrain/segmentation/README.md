@@ -363,6 +363,7 @@ study = sweep(
     storage="sqlite:///sweep.db",
     sampler=optuna.samplers.GPSampler(),  # Gaussian-process BO; TPE by default
     csv_path="trials.csv",
+    mlflow_db="~/project/mlflow.db",  # optional, else MLFLOW_TRACKING_URI
 )
 ```
 

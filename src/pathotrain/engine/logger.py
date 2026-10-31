@@ -11,6 +11,21 @@ from lightning_fabric.utilities.rank_zero import rank_zero_only
 _STATUS = {"success": "FINISHED", "pruned": "KILLED"}
 
 
+def sqlite_store(db: str | Path) -> dict[str, str]:
+    """``tracking_uri`` and ``artifact_location`` for one SQLite MLflow store at
+    ``db``, with artifacts in ``mlruns/`` beside it, wherever a run is launched from."""
+    db = Path(db).expanduser().resolve()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    return {"tracking_uri": f"sqlite:///{db}", "artifact_location": str(db.parent / "mlruns")}
+
+
+def set_experiment(experiment: str, artifact_location: str | None = None) -> None:
+    """Make ``experiment`` active, creating it with ``artifact_location`` if new."""
+    if artifact_location is not None and mlflow.get_experiment_by_name(experiment) is None:
+        mlflow.create_experiment(experiment, artifact_location)
+    mlflow.set_experiment(experiment)
+
+
 class MLflowLogger(Logger):
     """Fabric logger writing to an MLflow run, from rank 0 only.
 
@@ -49,12 +64,7 @@ class MLflowLogger(Logger):
             mlflow.set_tracking_uri(self.tracking_uri)
         parent = mlflow.active_run()
         if parent is None:
-            if (
-                self.artifact_location is not None
-                and mlflow.get_experiment_by_name(self.experiment) is None
-            ):
-                mlflow.create_experiment(self.experiment, self.artifact_location)
-            mlflow.set_experiment(self.experiment)
+            set_experiment(self.experiment, self.artifact_location)
         run = mlflow.start_run(run_name=self.run_name, nested=parent is not None)
         self.run_id = run.info.run_id
 
