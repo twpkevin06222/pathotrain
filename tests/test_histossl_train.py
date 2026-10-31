@@ -191,11 +191,11 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     import contextlib
     import io
 
-    from pathotrain.histossl.eval.linear_probe import main as probe_main
+    from pathotrain.histossl.eval import linear_probe
 
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
-        probe_main(
+        linear_probe.main(
             [str(out), "--train", cfg["eval"]["train"], "--test", cfg["eval"]["test"]]
             + ["--num-workers", "0", "--k", "3"]
         )

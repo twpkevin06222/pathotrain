@@ -249,7 +249,7 @@ def test_masks_hit_the_ratio_and_are_deterministic():
 
 
 def test_linear_probe_and_knn_separate_easy_features():
-    from pathotrain.histossl.eval import knn, linear_probe
+    from pathotrain.histossl.eval import fit_linear_probe, knn
 
     g = torch.Generator().manual_seed(0)
     centres = torch.randn(3, 16, generator=g) * 3
@@ -259,10 +259,10 @@ def test_linear_probe_and_knn_separate_easy_features():
         return centres[y] + torch.randn(n, 16, generator=g), y
 
     (train_x, train_y), (test_x, test_y) = sample(90), sample(30)
-    probe = linear_probe(train_x, train_y, test_x, test_y, 3)
+    probe = fit_linear_probe(train_x, train_y, test_x, test_y, 3)
     assert probe["probe/balanced_acc"] > 0.95 and probe["probe/auroc"] > 0.99
     assert probe["probe/weight_decay"] in (1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)
-    assert linear_probe(train_x, train_y, test_x, test_y, 3) == probe  # deterministic
+    assert fit_linear_probe(train_x, train_y, test_x, test_y, 3) == probe  # deterministic
     near = knn(train_x, train_y, test_x, test_y, 3, k=5)
     assert near["knn/acc"] > 0.95 and set(near) == {
         "knn/acc",
@@ -270,7 +270,7 @@ def test_linear_probe_and_knn_separate_easy_features():
         "knn/macro_f1",
         "knn/auroc",
     }
-    noise = linear_probe(torch.randn(90, 16), train_y, torch.randn(30, 16), test_y, 3)
+    noise = fit_linear_probe(torch.randn(90, 16), train_y, torch.randn(30, 16), test_y, 3)
     assert noise["probe/balanced_acc"] < 0.7  # nothing to learn
 
 
