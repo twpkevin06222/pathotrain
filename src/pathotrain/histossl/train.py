@@ -204,7 +204,7 @@ def load_backbone(path: str | Path) -> tuple[nn.Module, dict]:
     """The trained encoder of a checkpoint as a plain ``Dinov2Model`` (LoRA merged
     into its weights), in eval mode, with its config."""
     task, cfg = load_model(path)
-    backbone = task.backbone
+    backbone = task.encoder
     if hasattr(backbone, "merge_and_unload"):
         backbone = backbone.merge_and_unload()
     return backbone.eval(), cfg

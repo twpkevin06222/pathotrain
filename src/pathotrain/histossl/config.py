@@ -34,6 +34,7 @@ class MethodSpec:
     adaptation: frozenset[str]
     masking: Literal["required", "forbidden", "optional"]
     multicrop: bool
+    min_global_crops: int = 1
     implemented: bool = True
 
 
@@ -51,7 +52,7 @@ METHODS = {
         adaptation=frozenset({"lora", "last_n", "full"}),
         masking="required",
         multicrop=True,
-        implemented=False,
+        min_global_crops=2,  # each global view is the others' target
     ),
     "lejepa": MethodSpec(
         init=frozenset({"scratch"}),
@@ -266,6 +267,11 @@ def validate(cfg: dict) -> SSLConfig:
             errors.append(f"{name} needs a masking section")
         if spec.masking == "forbidden" and cfg.get("masking") is not None:
             errors.append(f"{name} takes no masking section")
+        if crops is not None and crops.global_crops < spec.min_global_crops:
+            errors.append(
+                f"{name} needs data.crops.global_crops >= {spec.min_global_crops}, "
+                f"got {crops.global_crops}"
+            )
         if not spec.multicrop and crops is not None and crops.local_crops:
             errors.append(
                 f"{name} takes no local crops, got data.crops.local_crops={crops.local_crops}"

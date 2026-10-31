@@ -130,7 +130,7 @@ def test_teacher_jepa_learns_the_teacher_tokens(tmp_path, monkeypatch):
     opt = torch.optim.AdamW([p for p in task.model.parameters() if p.requires_grad], lr=3e-3)
     losses = []
     for _ in range(30):
-        loss = task._loss(images, torch.Generator().manual_seed(0))
+        loss = task._losses(images, torch.Generator().manual_seed(0))["loss"]
         loss.backward()
         opt.step()
         opt.zero_grad()
@@ -162,5 +162,110 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     task.model.load_state_dict(best["model"])
     x = torch.rand(2, 3, 56, 56)
     with torch.no_grad():
-        want = task.backbone.eval()(pixel_values=x).last_hidden_state
+        want = task.encoder.eval()(pixel_values=x).last_hidden_state
         assert torch.allclose(backbone(pixel_values=x).last_hidden_state, want, atol=1e-5)
+
+
+def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
+    from pathotrain.histossl.methods.dinov2 import DINOHead, koleo, sinkhorn_knopp
+
+    scores = torch.rand(64, 8) * 2 - 1  # cosines, as DINOHead scores
+    scores[:, 0] += 0.5  # one prototype favoured
+    q = sinkhorn_knopp(scores, 0.1, iterations=20)
+    assert torch.allclose(q.sum(1), torch.ones(64), atol=1e-4)  # each row a distribution
+    assert torch.allclose(q.sum(0), torch.full((8,), 64 / 8), atol=0.1)  # prototypes used evenly
+    spread, clump = torch.eye(8), torch.ones(8, 8) + 0.01 * torch.randn(8, 8)
+    assert koleo(spread) < koleo(clump)
+    head = DINOHead(32, prototypes=10, hidden_dim=16, bottleneck_dim=8)
+    assert head(torch.randn(3, 32)).abs().max() <= 1 + 1e-5  # unit-norm prototypes: cosines
+    assert not head.last_layer.parametrizations.weight.original0.requires_grad
+
+
+def _dinov2_cfg(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg["method"] = {
+        "name": "dinov2",
+        "prototypes": 32,
+        "hidden_dim": 16,
+        "bottleneck_dim": 8,
+        "freeze_last_layer_epochs": 1,
+    }
+    cfg["teacher"] = {"type": "ema", "momentum": [0.9, 1.0]}
+    cfg["masking"] = {"type": "block", "ratio": [0.1, 0.5], "p": 0.5}
+    cfg["data"]["crops"] = {
+        "global_crops": 2,
+        "local_crops": 2,
+        "global_size": 56,
+        "local_size": 28,
+    }
+    return cfg
+
+
+def test_dinov2_config_rules(tmp_path):
+    from importlib.resources import files
+
+    from pathotrain.engine import load_config
+
+    assert validate(load_config(files("pathotrain.histossl") / "dinov2.example.yaml"))
+    cfg = _dinov2_cfg(tmp_path)
+    validate(cfg)
+    with pytest.raises(ConfigError, match="global_crops >= 2"):
+        validate({**cfg, "data": {**cfg["data"], "crops": {"global_crops": 1}}})
+    with pytest.raises(ConfigError, match="teacher.type in \\['ema'\\]"):
+        validate({**cfg, "teacher": {"type": "frozen"}})
+
+
+def test_dinov2_trains_the_ema_teacher_and_resumes(tmp_path, monkeypatch):
+    import mlflow
+
+    from pathotrain.histossl.methods import dinov2
+
+    monkeypatch.setattr(dinov2, "build_backbone", _tiny)
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = _dinov2_cfg(tmp_path)
+    task = build_task(cfg)
+    start = {k: v.clone() for k, v in task.model.teacher.state_dict().items()}
+    head_before = task.model.dino_head.last_layer.parametrizations.weight.original1.clone()
+
+    metrics = train(cfg)
+    assert {"val/loss", "probe/balanced_acc"} <= metrics.keys()
+    last = torch.load(tmp_path / "run/checkpoints/last.ckpt", weights_only=False)
+    steps = last["step"]
+    assert steps == 2 * 2  # 8 samples per epoch, batches of 4
+    assert int(last["model"]["teacher.step"]) == steps  # schedules resume from here
+    teacher = {
+        k[len("teacher.") :]: v for k, v in last["model"].items() if k.startswith("teacher.")
+    }
+    lora = [k for k in teacher if "lora_" in k]
+    base = [k for k in teacher if k.startswith("backbone.") and "lora_" not in k]
+    assert lora and any(not torch.equal(teacher[k], start[k]) for k in lora)  # EMA moved
+    assert all(torch.equal(teacher[k], start[k]) for k in base)  # frozen weights untouched
+    # The head's last layer was held for the first epoch (2 steps) and then trained.
+    head_after = last["model"]["dino_head.last_layer.parametrizations.weight.original1"]
+    assert not torch.equal(head_after, head_before)
+
+    longer = {**cfg, "trainer": {**cfg["trainer"], "max_epochs": 3}}
+    train(longer, resume=tmp_path / "run/checkpoints/last.ckpt")
+    resumed = torch.load(tmp_path / "run/checkpoints/last.ckpt", weights_only=False)
+    assert int(resumed["model"]["teacher.step"]) == resumed["step"] == 3 * 2
+
+    backbone, _ = load_backbone(tmp_path / "run/checkpoints/last.ckpt")  # the EMA teacher
+    assert type(backbone) is Dinov2Model
+
+
+def test_dinov2_freezes_the_head_last_layer_first(tmp_path, monkeypatch):
+    from pathotrain.histossl.methods import dinov2
+
+    monkeypatch.setattr(dinov2, "build_backbone", _tiny)
+    task = build_task(_dinov2_cfg(tmp_path)).train()
+    task.configure_optimizers(total_steps=10, steps_per_epoch=5)
+    batch = {"global": torch.rand(2, 2, 3, 56, 56), "local": torch.rand(2, 2, 3, 28, 28)}
+    task._losses(batch, torch.Generator().manual_seed(0))["loss"].backward()
+    last = task.model.dino_head.last_layer.parametrizations.weight.original1
+    assert last.grad is not None
+    task.on_before_optimizer_step()  # step 0 < 5: frozen
+    assert last.grad is None and task.model.dino_head.mlp[0].weight.grad is not None
+    task.model.teacher.step.fill_(5)
+    assert task._temperature() == pytest.approx(0.07)  # warmup (1 epoch) done
+    assert dinov2._cosine(0.9, 1.0, 10, 10) == pytest.approx(1.0)

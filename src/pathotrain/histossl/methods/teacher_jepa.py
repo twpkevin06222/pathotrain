@@ -102,13 +102,14 @@ class TeacherJEPATask(SSLTask):
             self.mask_fn = functools.partial(random_mask, ratio=ratio)
         self.patch = model.backbone.config.patch_size
 
-    def _loss(self, images: Tensor, generator: torch.Generator | None) -> Tensor:
+    def _losses(self, batch, generator: torch.Generator | None) -> dict[str, Tensor]:
+        images = self._images(batch)
         grid = images.shape[-1] // self.patch
         mask = torch.stack([self.mask_fn(grid, generator=generator) for _ in images])
         mask = mask.to(images.device)
         predicted, target = self.model(images, mask)
         target = F.layer_norm(target.float(), target.shape[-1:])
-        return F.smooth_l1_loss(predicted.float()[mask], target[mask])
+        return {"loss": F.smooth_l1_loss(predicted.float()[mask], target[mask])}
 
 
 def build(cfg, ssl, probe=None) -> TeacherJEPATask:
