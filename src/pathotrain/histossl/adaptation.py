@@ -3,21 +3,53 @@
 - ``full``: every weight.
 - ``frozen``: none (feature extraction, probe baselines).
 - ``last_n``: the last ``n`` transformer blocks and the final LayerNorm.
-- ``lora``: low-rank adapters on ``targets`` (peft, Hu et al. 2021); the base
-  weights stay frozen, and ``model.disable_adapter()`` runs the base model.
+- ``lora``: low-rank adapters on ``targets`` (peft, Hu et al. 2021), by default
+  every linear layer of every block (attention and MLP); the base weights stay
+  frozen, and ``model.disable_adapter()`` runs the base model.
 
-Dinov2 module names (transformers 5): ``q_proj``, ``k_proj``, ``v_proj`` and
-``o_proj`` in attention, ``fc1`` and ``fc2`` in the MLP.
+Dinov2 linear layers (transformers 5) per block: ``q_proj``, ``k_proj``,
+``v_proj`` and ``o_proj`` in attention; in the MLP ``fc1`` and ``fc2``, or with a
+SwiGLU MLP (Midnight, DINOv2 ViT-g) ``gate_proj``, ``up_proj`` and ``down_proj``.
+LoRA targets are checked against the layers the model really has.
 """
 
+import copy
+import json
 import re
 from collections.abc import Sequence
+from pathlib import Path
 
 from torch import nn
 from transformers import Dinov2Model
 
 ADAPTATIONS = ("full", "frozen", "last_n", "lora")
-LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "fc1", "fc2")
+# Every linear layer a Dinov2 block may have, plain or SwiGLU MLP; which exist depends on
+# the model (see block_linears).
+LORA_TARGETS = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "fc1",
+    "fc2",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+
+
+def block_linears(model: nn.Module) -> list[str]:
+    """The names of the linear layers in the model's transformer blocks, e.g.
+    ``["down_proj", "gate_proj", ..., "v_proj"]`` for Midnight; the same once LoRA
+    adapters are in (their own layers are not counted)."""
+    names = set()
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Linear) or not re.search(r"encoder\.layer\.\d+\.", name):
+            continue
+        if ".lora_" in name:  # an adapter's A or B
+            continue
+        names.add(name.removesuffix(".base_layer").rsplit(".", 1)[-1])
+    return sorted(names)
 
 
 def apply_adaptation(
@@ -27,11 +59,13 @@ def apply_adaptation(
     rank: int = 16,
     alpha: float | None = None,
     dropout: float = 0.0,
-    targets: Sequence[str] = ("q_proj", "v_proj"),
+    targets: Sequence[str] | None = None,
 ) -> nn.Module:
     """Set which weights of ``model`` train, as ``type`` says, and return the model
     to train: ``model`` itself, or for ``lora`` a peft ``PeftModel`` around it.
-    ``alpha`` defaults to ``rank`` (adapter scale 1).
+    ``targets`` defaults to every linear layer of the blocks (:func:`block_linears`:
+    for Midnight the attention q, k, v and output projections and the SwiGLU MLP's
+    gate, up and down projections); ``alpha`` defaults to ``rank`` (adapter scale 1).
 
     Raises:
         ValueError: Unknown ``type``, ``n`` outside 1..depth, ``rank < 1`` or a
@@ -60,13 +94,34 @@ def _lora(model, rank, alpha, dropout, targets) -> nn.Module:
         ) from e
     if rank < 1:
         raise ValueError(f"LoRA rank must be >= 1, got {rank}")
-    unknown = sorted(set(targets) - set(LORA_TARGETS))
-    if unknown or not targets:
-        raise ValueError(f"LoRA targets must be among {LORA_TARGETS}, got {list(targets)}")
+    present = block_linears(model)
+    targets = present if targets is None else targets
+    # peft only fails when no target matches at all, so a missing one would be skipped.
+    missing = sorted(set(targets) - set(present))
+    if missing or not targets:
+        raise ValueError(
+            f"LoRA targets {missing or list(targets)} are not linear layers of this model; "
+            f"its blocks have {present}"
+        )
     config = LoraConfig(
         r=rank, lora_alpha=alpha or rank, lora_dropout=dropout, target_modules=list(targets)
     )
     return get_peft_model(model, config)
+
+
+def merge_and_export(model: nn.Module, path: str | Path, metadata: dict | None = None) -> Path:
+    """Save ``model`` as a plain Hugging Face model in the folder ``path``: LoRA
+    adapters, if any, merged into the weights (of a copy, so ``model`` keeps them),
+    ``config.json`` and ``model.safetensors`` loadable with
+    ``Dinov2Model.from_pretrained(path)`` (no peft needed), and ``metadata`` (e.g. a
+    checkpoint's provenance) in ``pathotrain.json`` beside them. Returns ``path``."""
+    path = Path(path)
+    merged = hasattr(model, "merge_and_unload")
+    plain = copy.deepcopy(model).merge_and_unload() if merged else model
+    plain.save_pretrained(path)
+    record = {**(metadata or {}), "lora_merged": merged}
+    (path / "pathotrain.json").write_text(json.dumps(record, indent=2) + "\n")
+    return path
 
 
 def param_groups(

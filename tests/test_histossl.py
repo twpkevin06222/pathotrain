@@ -104,6 +104,69 @@ def test_lora_trains_adapters_and_disables_to_the_base():
         apply_adaptation(_tiny(), "lora", rank=0)
 
 
+def _swiglu():
+    """A tiny Dinov2 with a SwiGLU MLP, as Midnight (DINOv2 ViT-g) has: no fc1 / fc2."""
+    config = Dinov2Config(
+        hidden_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        patch_size=14,
+        image_size=28,
+        use_swiglu_ffn=True,
+    )
+    return Dinov2Model(config)
+
+
+def test_lora_targets_must_exist_in_the_model():
+    pytest.importorskip("peft")
+    from pathotrain.histossl.adaptation import block_linears
+
+    every = ["down_proj", "gate_proj", "k_proj", "o_proj", "q_proj", "up_proj", "v_proj"]
+    assert block_linears(_swiglu()) == every
+    assert "fc1" in block_linears(_tiny())  # a plain MLP has them
+    with pytest.raises(ValueError, match="\\['fc1'\\] are not linear layers"):
+        apply_adaptation(_swiglu(), "lora", targets=["q_proj", "fc1"])  # peft would skip fc1
+    chosen = ["q_proj", "gate_proj", "down_proj"]
+    model = apply_adaptation(_swiglu(), "lora", rank=2, targets=chosen)
+    adapted = {n.split(".lora_")[0].rsplit(".", 1)[-1] for n in _trainable(model)}
+    assert adapted == set(chosen)
+    assert block_linears(model) == every  # adapters' own layers are not counted
+
+    default = apply_adaptation(_swiglu(), "lora", rank=2)  # every linear layer of every block
+    adapted = {n.split(".lora_")[0] for n in _trainable(default)}
+    assert {n.rsplit(".", 1)[-1] for n in adapted} == set(every)
+    assert len(adapted) == 2 * 7  # 2 blocks x 7 layers
+
+
+def test_merge_and_export_saves_a_plain_model_and_metadata(tmp_path):
+    pytest.importorskip("peft")
+    import json
+
+    from pathotrain.histossl.adaptation import merge_and_export
+
+    torch.manual_seed(0)
+    model = apply_adaptation(_tiny(), "lora", rank=4)
+    for name, p in model.named_parameters():
+        if "lora_B" in name:  # off zero, so merging changes the weights
+            p.data.normal_()
+    x = torch.rand(2, 3, 28, 28)
+    with torch.no_grad():
+        want = tokens(model.eval(), x)[1]
+    out = merge_and_export(model, tmp_path / "exported", {"method": "teacher_jepa"})
+    assert {"config.json", "model.safetensors", "pathotrain.json"} <= {
+        p.name for p in out.iterdir()
+    }
+    meta = json.loads((out / "pathotrain.json").read_text())
+    assert meta == {"method": "teacher_jepa", "lora_merged": True}
+    plain = Dinov2Model.from_pretrained(out).eval()  # transformers alone, no peft
+    assert not any("lora_" in n for n, _ in plain.named_parameters())
+    with torch.no_grad():
+        assert torch.allclose(tokens(plain, x)[1], want, atol=1e-5)
+    assert any("lora_" in n for n, _ in model.named_parameters())  # the model keeps its adapters
+    merge_and_export(_tiny(), tmp_path / "plain")  # no adapters: saved as is
+    assert json.loads((tmp_path / "plain/pathotrain.json").read_text()) == {"lora_merged": False}
+
+
 def test_param_groups_skip_decay_on_norms_and_tokens_and_decay_lr_by_layer():
     model = apply_adaptation(_tiny(depth=2), "full")
     groups = param_groups(model, lr=1.0, weight_decay=0.05, layer_decay=0.5)

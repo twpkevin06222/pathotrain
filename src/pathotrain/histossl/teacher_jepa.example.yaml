@@ -20,7 +20,8 @@ backbone:
 adaptation:
   type: lora                # or last_n (with n: 4), full
   rank: 16
-  targets: [q_proj, v_proj] # any of q_proj, k_proj, v_proj, o_proj, fc1, fc2
+  # targets: [q_proj, v_proj]  # default: every linear layer of every block, for Midnight
+  #                            # q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
 teacher:
   type: frozen              # with LoRA: the backbone with its adapters off
 masking:

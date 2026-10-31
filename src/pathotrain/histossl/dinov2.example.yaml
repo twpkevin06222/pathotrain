@@ -30,7 +30,7 @@ backbone:
 adaptation:
   type: lora                # or last_n (with n: 4), full
   rank: 16
-  targets: [q_proj, v_proj]
+  # targets: [q_proj, v_proj]  # default: every linear layer of every block
 teacher:
   type: ema
   momentum: [0.994, 1.0]    # cosine over the run

@@ -4,9 +4,8 @@
 > For research use only. Not a medical device.
 
 Self-supervised learning on pathology tiles: continued pretraining of Midnight
-(teacher_jepa, dinov2) and LeJEPA from scratch. Work in progress: teacher_jepa
-and dinov2 train; lejepa is planned (the config registry already knows its
-rules). Needs the `histossl` extra for LoRA:
+(teacher_jepa, dinov2, lejepa) and LeJEPA from scratch. Needs the `histossl` extra
+for LoRA:
 
 ```bash
 pip install "pathotrain[histossl]"   # peft
@@ -33,8 +32,12 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   (non-reentrant, so LoRA adapters on a frozen trunk still get gradients).
 - `tokens(model, x, mask)`: final CLS and patch tokens; masked patches take the
   model's `mask_token` (Dinov2's `bool_masked_pos`).
-- `apply_adaptation`: LoRA targets among `q_proj`, `k_proj`, `v_proj`, `o_proj`,
-  `fc1`, `fc2` (default `q_proj`, `v_proj`); `alpha` defaults to the rank.
+- `apply_adaptation`: LoRA by default on every linear layer of every block:
+  `q_proj`, `k_proj`, `v_proj`, `o_proj` and, for Midnight's SwiGLU MLP,
+  `gate_proj`, `up_proj`, `down_proj` (`fc1`, `fc2` for a plain MLP, as the
+  from-scratch ViTs have). `targets: [...]` picks fewer; targets the model lacks
+  are an error, and checkpoints record the layers adapted. `alpha` defaults to
+  the rank.
 - `param_groups`: AdamW groups over trainable weights, no weight decay on
   biases, norms, LayerScale and the CLS / mask / position tokens; optional
   layer-wise learning-rate decay.
@@ -42,9 +45,13 @@ mask_fn = functools.partial(block_mask, ratio=(0.1, 0.5))  # for MultiCropTransf
   masks rectangles (BEiT / iBOT style) and, with `p < 1`, leaves some views
   unmasked.
 
-On one RTX 5090, Midnight-12k with LoRA rank 16 trains 3.9M of 1.14B weights; a
-masked student plus an adapter-off teacher pass at batch 64 (224 px, bf16) peaks
-at 9.6 GiB.
+On one RTX 5090, a masked student plus an adapter-off teacher pass of
+Midnight-12k with LoRA rank 16 at batch 64 (224 px, bf16):
+
+| LoRA targets | trained weights | step | peak memory |
+|---|---|---|---|
+| all 7 per block (default) | 18.7M of 1.14B | 1.45 s | 10.4 GiB |
+| `q_proj`, `v_proj` | 3.9M | 1.13 s | 9.6 GiB |
 
 ## Training: teacher_jepa
 
@@ -101,6 +108,56 @@ facebookresearch/dinov2 (Apache-2.0).
   and releases.
 - Validation's `val/loss` uses each tile and its mirror image as the two global
   views, with fixed masks.
+
+## Training: lejepa
+
+```bash
+python -m pathotrain.histossl.train config.yaml   # start from lejepa.example.yaml
+```
+
+LeJEPA (Balestriero & LeCun 2025): one network, no teacher, EMA or
+stop-gradient. From scratch on a ViT-B/14 as in the paper, or on top of
+Midnight (`backbone: {init: pretrained, id: midnight-12k}` with LoRA or
+`last_n`), which needs far fewer steps to be useful; no official LeJEPA weights
+are released. Written from the paper; the reference code is CC-BY-NC and none
+of it is used.
+
+- Prediction: every view's projected CLS embedding moves toward the mean of the
+  tile's global views (squared distance), over 2 global and 6 local crops.
+- SIGReg: each view's embeddings, projected on `slices` (1024) random unit
+  directions, are scored against N(0, 1) by the Epps-Pulley statistic (the
+  characteristic functions' squared distance weighted by `exp(-t^2 / 2)`,
+  trapezoid rule on `knots` (17) points over `[-t_max, t_max]` (5), times the
+  batch size). Directions are redrawn each step from the step number, the same
+  on every rank, and saved with the weights for resume.
+- Loss: `(1 - lamb) * prediction + lamb * sigreg`, `lamb` 0.05.
+- The integration range, knots and batch-size scaling were taken from the paper
+  without its code; `t_max`, `knots`, `slices` and `lamb` are settings, so tune
+  them if a run disagrees.
+- The projector's BatchNorm is per GPU under DDP (no SyncBatchNorm).
+
+## Export
+
+```bash
+python -m pathotrain.histossl.export runs/jepa01/checkpoints/best.ckpt exported/jepa01
+```
+
+Writes the encoder as a plain Hugging Face model, LoRA merged into its weights
+(the EMA teacher for dinov2, the student otherwise): `config.json`,
+`model.safetensors` and `pathotrain.json` with the checkpoint's provenance,
+epoch, step, monitored metric and experiment config. It loads with transformers
+alone, e.g. for `pathotrain.segmentation` or another library:
+
+```python
+from transformers import Dinov2Model
+
+encoder = Dinov2Model.from_pretrained("exported/jepa01")
+```
+
+Prepare tiles as `pathotrain.json` says (`provenance.input_size` px,
+`provenance.normalisation` on `[0, 1]` pixels). In Python,
+`merge_and_export(model, path, metadata)` does the same for any (LoRA) model and
+leaves the model's adapters in place.
 
 ## Linear probe and kNN
 

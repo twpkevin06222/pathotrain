@@ -35,7 +35,6 @@ class MethodSpec:
     masking: Literal["required", "forbidden", "optional"]
     multicrop: bool
     min_global_crops: int = 1
-    implemented: bool = True
 
 
 METHODS = {
@@ -55,12 +54,12 @@ METHODS = {
         min_global_crops=2,  # each global view is the others' target
     ),
     "lejepa": MethodSpec(
-        init=frozenset({"scratch"}),
+        init=frozenset({"scratch", "pretrained"}),  # from scratch, or on top of Midnight
         teacher=frozenset({"none"}),
-        adaptation=frozenset({"full"}),
+        adaptation=frozenset({"full", "lora", "last_n"}),
         masking="forbidden",
         multicrop=True,
-        implemented=False,
+        min_global_crops=2,  # the prediction target is the global views' mean
     ),
 }
 
@@ -86,7 +85,7 @@ class Adaptation:
     rank: int = 16
     alpha: float | None = None
     dropout: float = 0.0
-    targets: tuple[str, ...] = ("q_proj", "v_proj")
+    targets: tuple[str, ...] | None = None  # every linear layer of the blocks
 
 
 @dataclass(frozen=True)
@@ -173,8 +172,6 @@ def validate(cfg: dict) -> SSLConfig:
     spec = METHODS.get(name)
     if spec is None:
         errors.append(f"method.name must be one of {sorted(METHODS)}, got {name!r}")
-    elif not spec.implemented:
-        errors.append(f"method {name!r} is not implemented yet")
     backbone = _parse(Backbone, cfg.get("backbone"), "backbone", errors)
     adaptation = _parse(Adaptation, cfg.get("adaptation", {}), "adaptation", errors)
     teacher = _parse(Teacher, cfg.get("teacher", {"type": "none"}), "teacher", errors)
@@ -214,8 +211,9 @@ def validate(cfg: dict) -> SSLConfig:
         if adaptation.type == "lora":
             if adaptation.rank < 1:
                 errors.append(f"adaptation.rank must be >= 1, got {adaptation.rank}")
-            bad = sorted(set(adaptation.targets) - set(LORA_TARGETS))
-            if bad or not adaptation.targets:
+            targets = adaptation.targets
+            bad = [] if targets is None else sorted(set(targets) - set(LORA_TARGETS))
+            if bad or targets == ():
                 errors.append(f"adaptation.targets must be among {LORA_TARGETS}, got {bad or []}")
     if teacher is not None:
         if teacher.momentum is not None and teacher.type != "ema":
