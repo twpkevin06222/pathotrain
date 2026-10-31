@@ -83,6 +83,7 @@ def fit(
     config_path: Path,
     resume: str | Path | None = None,
     monitor: str = "val/miou",
+    mode: str = "max",
     trainer_defaults: dict | None = None,
     checkpoint_extra: dict | None = None,
     train_sampler: Sampler | None = None,
@@ -93,7 +94,7 @@ def fit(
     to ``cfg["mlflow_db"]`` (artifacts in ``mlruns/`` beside it) when set, else to
     ``MLFLOW_TRACKING_URI``.
 
-    ``monitor`` is the checkpoint and early-stopping default, ``trainer_defaults``
+    ``monitor`` (and its ``mode``) is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
     (e.g. ``collate_fn``); the config overrides each. ``checkpoint_extra`` is stored
     in both checkpoints beside the config (see :class:`ModelCheckpoint`).
@@ -101,12 +102,14 @@ def fit(
     num_samples=n)`` for epochs of ``n`` tiles.
     """
     out = Path(cfg["output_dir"])
-    checkpoint = {"monitor": monitor, **cfg.get("checkpoint", {})}
+    checkpoint = {"monitor": monitor, "mode": mode, **cfg.get("checkpoint", {})}
     callbacks = [
         ModelCheckpoint(out / "checkpoints", config=cfg, extra=checkpoint_extra, **checkpoint)
     ]
     if "early_stopping" in cfg:
-        callbacks.append(EarlyStopping(**{"monitor": monitor, **cfg["early_stopping"]}))
+        callbacks.append(
+            EarlyStopping(**{"monitor": monitor, "mode": mode, **cfg["early_stopping"]})
+        )
     store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
     mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
     mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
