@@ -123,7 +123,7 @@ def _holdout(labels: Tensor, fraction: float, seed: int) -> Tensor:
     return held.to(labels.device)
 
 
-def linear_probe(
+def fit_linear_probe(
     train_x: Tensor,
     train_y: Tensor,
     test_x: Tensor,
@@ -183,7 +183,7 @@ def evaluate_features(
     train_x, train_y = extract(model, train, batch_size, num_workers)
     test_x, test_y = extract(model, test, batch_size, num_workers)
     return {
-        **linear_probe(train_x, train_y, test_x, test_y, num_classes),
+        **fit_linear_probe(train_x, train_y, test_x, test_y, num_classes),
         **knn(train_x, train_y, test_x, test_y, num_classes, k),
     }
 

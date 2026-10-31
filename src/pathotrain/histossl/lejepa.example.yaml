@@ -20,7 +20,8 @@ method:
   layers: 3
 backbone:
   init: scratch
-  arch: vit_b14             # or vit_s14, vit_l14; patch 14, 16 x 16 tokens at 224 px
+  arch: vit_b14             # or vit_s14, vit_l14 (patch 14: 16 x 16 tokens at 224 px), or
+                            # vit_s16, vit_b16 (patch 16: 14 x 14; set local_size to 96)
   grad_checkpointing: true
   # init: pretrained        # from Midnight's weights instead (and drop arch)
   # id: midnight-12k

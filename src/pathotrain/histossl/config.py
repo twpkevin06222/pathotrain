@@ -14,10 +14,8 @@ from typing import Any, Literal
 from loguru import logger
 
 from pathotrain.histossl.adaptation import ADAPTATIONS, LORA_TARGETS
-from pathotrain.histossl.backbones import ARCHS, DTYPES
+from pathotrain.histossl.backbones import ARCHS, DTYPES, PRETRAINED_PATCH, patch_size
 from pathotrain.pathofm import FOUNDATION_MODELS
-
-PATCH = 14  # every backbone here has 14 px patches
 
 
 class ConfigError(ValueError):
@@ -245,10 +243,13 @@ def validate(cfg: dict) -> SSLConfig:
         if not 0 < masking.min_aspect <= 1 or not 0 <= masking.p <= 1:
             errors.append("masking.min_aspect must be in (0, 1] and masking.p in [0, 1]")
     if crops is not None:
+        patch = PRETRAINED_PATCH
+        if backbone is not None and (backbone.init == "pretrained" or backbone.arch in ARCHS):
+            patch = patch_size(backbone.init, backbone.arch)
         for size in ("global_size", "local_size"):
-            if getattr(crops, size) % PATCH or getattr(crops, size) <= 0:
+            if getattr(crops, size) % patch or getattr(crops, size) <= 0:
                 errors.append(
-                    f"data.crops.{size} must be a positive multiple of the {PATCH} px patch, "
+                    f"data.crops.{size} must be a positive multiple of the {patch} px patch, "
                     f"got {getattr(crops, size)}"
                 )
         _range("data.crops.global_scale", crops.global_scale, errors)
