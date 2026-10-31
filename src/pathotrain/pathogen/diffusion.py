@@ -59,7 +59,7 @@ class LatentTranslationTask(Task):
     """What every latent model here shares: a frozen VAE, the source latent as the
     condition, an EMA of the weights, validation and AdamW with warmup and cosine
     decay. Subclasses give ``_objective`` (the training loss; deterministic given
-    ``generator``) and ``_sample`` (latents from noise).
+    ``generator``) and ``_denoise`` (latents from given noise).
 
     A batch is ``(source, target)`` images in ``[0, 1]``, or, for training from a
     latent cache (:class:`~pathotrain.pathogen.cache.CachedLatentDataset`), a dict
@@ -162,8 +162,13 @@ class LatentTranslationTask(Task):
         (None for models without them)."""
         raise NotImplementedError
 
-    def _sample(self, condition: Tensor, steps: int, generator: torch.Generator | None) -> Tensor:
+    def _denoise(self, latents: Tensor, condition: Tensor, steps: int) -> Tensor:
+        """Clean latents from the noise ``latents``, in ``steps`` model steps."""
         raise NotImplementedError
+
+    def _sample(self, condition: Tensor, steps: int, generator: torch.Generator | None) -> Tensor:
+        noise = torch.randn(condition.shape, generator=generator, device=condition.device)
+        return self._denoise(noise, condition, steps)
 
     def training_step(self, batch) -> tuple[Tensor, dict[str, Tensor]]:
         loss, _ = self._objective(*self._latents(batch, sample=True), self.model)
@@ -258,11 +263,11 @@ class LatentDiffusionTask(LatentTranslationTask):
             goal = self.scheduler.get_velocity(latents, noise, timesteps)
         return F.mse_loss(pred.float(), goal), None
 
-    def _sample(self, condition: Tensor, steps: int, generator: torch.Generator | None) -> Tensor:
+    def _denoise(self, latents: Tensor, condition: Tensor, steps: int) -> Tensor:
         scheduler = DDIMScheduler.from_config(self.scheduler.config)
         scheduler.set_timesteps(steps, device=condition.device)
-        latents = torch.randn(condition.shape, generator=generator, device=condition.device)
         for t in scheduler.timesteps:
-            pred = self.net(torch.cat([latents, condition], 1), t.expand(len(latents))).sample
+            # shape[0], not len(): an ONNX trace keeps the batch dynamic
+            pred = self.net(torch.cat([latents, condition], 1), t.expand(latents.shape[0])).sample
             latents = scheduler.step(pred.float(), t, latents).prev_sample
         return latents

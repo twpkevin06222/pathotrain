@@ -116,6 +116,38 @@ with torch.autocast("cuda", torch.bfloat16):
 ihc = (ihc[0].float().permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
 ```
 
+### ONNX export
+
+```bash
+pip install "pathotrain[export]"   # onnx, onnxruntime
+python -m pathotrain.pathogen.export runs/her2_sit01/checkpoints/best.ckpt model.onnx --steps 25
+```
+
+One graph does the whole translation: VAE encoder, the sampler unrolled for
+`--steps` steps (default the task's `sample_steps`) with the EMA weights, and
+the VAE decoder.
+
+- Inputs: `image` (batch, 3, size, size) float32 tiles in `[0, 1]`, and `noise`
+  (batch, 4, size / 8, size / 8) float32 standard normal, where sampling
+  starts. Draw the noise yourself, so you choose the seed. Output: `translated`
+  (batch, 3, size, size) in `[0, 1]`.
+- The batch is dynamic; the side is fixed at `data.crop` unless `--size` (a
+  multiple of 64 for the default UNet, 16 for SiT with 2 x 2 patches).
+- The steps are fixed in the graph: export again for another number. More
+  steps add nodes, not weights (SiT-B with the SD VAE: ~700 MB at any steps).
+- The `pathotrain` metadata key holds JSON with the shapes, steps and sampler.
+  Export checks ONNX Runtime against PyTorch on random inputs.
+
+```python
+import numpy as np
+import onnxruntime as ort
+
+session = ort.InferenceSession("model.onnx", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+image = (he_tiles / 255).astype(np.float32).transpose(0, 3, 1, 2)  # (B, H, W, 3) uint8 -> (B, 3, H, W)
+noise = np.random.default_rng(0).standard_normal((len(image), 4, 64, 64), dtype=np.float32)  # 512 px
+(ihc,) = session.run(None, {"image": image, "noise": noise})
+```
+
 ## SiT with rectified flow and REPA
 
 `model.name: sit` swaps the UNet and DDPM for the current recipe; data, VAE,

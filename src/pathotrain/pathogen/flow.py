@@ -271,10 +271,9 @@ class FlowMatchingTask(LatentTranslationTask):
         return loss, logs
 
     def _velocity(self, latents: Tensor, condition: Tensor, t: Tensor) -> Tensor:
-        return self.net(torch.cat([latents, condition], 1), t.expand(len(latents)))[0].float()
+        return self.net(torch.cat([latents, condition], 1), t.expand(latents.shape[0]))[0].float()
 
-    def _sample(self, condition: Tensor, steps: int, generator: torch.Generator | None) -> Tensor:
-        latents = torch.randn(condition.shape, generator=generator, device=condition.device)
+    def _denoise(self, latents: Tensor, condition: Tensor, steps: int) -> Tensor:
         times = torch.linspace(1, 0, steps + 1, device=condition.device)
         for t, t_next in itertools.pairwise(times):
             v = self._velocity(latents, condition, t)

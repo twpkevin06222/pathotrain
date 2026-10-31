@@ -215,11 +215,14 @@ def export_onnx(
     metadata: dict,
     opset: int = 17,
     atol: float = 1e-3,
+    inputs: dict[str, tuple[int, ...]] | None = None,
 ) -> Path:
     """Write ``model`` (images -> ``output_names`` tensors) to ``path`` as fp32 ONNX
     with a dynamic batch, store ``metadata`` as JSON under the ``pathotrain`` metadata
     key, and check ONNX Runtime against PyTorch on random images. Weights over 2 GB
-    go to ``<path>.data``, which must stay beside the graph.
+    go to ``<path>.data``, which must stay beside the graph. ``inputs``: the graph's
+    inputs and their shapes without the batch, in ``model``'s argument order
+    (default ``image`` of ``(3, size, size)``).
 
     Raises:
         AssertionError: An output differs from PyTorch by more than ``atol`` (relative
@@ -235,16 +238,17 @@ def export_onnx(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     model = model.eval().cpu().float()
-    names = ["image", *output_names]
+    inputs = inputs or {"image": (3, size, size)}
+    names = [*inputs, *output_names]
     # Over 2 GB the exporter writes one file per weight; trace into a scratch folder and
     # save the weights as a single <name>.data beside the graph instead.
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp, torch.no_grad():
         traced = Path(tmp) / path.name
         torch.onnx.export(
             model,
-            (torch.randn(1, 3, size, size),),
+            tuple(torch.randn(1, *shape) for shape in inputs.values()),
             str(traced),
-            input_names=["image"],
+            input_names=list(inputs),
             output_names=output_names,
             dynamic_axes={n: {0: "batch"} for n in names},
             opset_version=opset,
@@ -262,12 +266,13 @@ def export_onnx(
         location=f"{path.name}.data",
     )
 
-    images = torch.randn(2, 3, size, size)  # another batch size than traced: checks the axis
+    # Another batch size than traced: checks the axis.
+    feeds = {name: torch.randn(2, *shape) for name, shape in inputs.items()}
     with torch.no_grad():
-        expected = model(images)
+        expected = model(*feeds.values())
     expected = [expected] if isinstance(expected, torch.Tensor) else list(expected)
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-    actual = session.run(output_names, {"image": images.numpy()})
+    actual = session.run(output_names, {k: v.numpy() for k, v in feeds.items()})
     for name, want, got in zip(output_names, expected, actual, strict=True):
         want = want.numpy()
         diff = float(np.abs(want.astype(np.float64) - got).max()) if want.size else 0.0

@@ -354,3 +354,31 @@ def test_spread_first_puts_evenly_spaced_tiles_first():
     assert order[:4] == [0, 2, 5, 7] and sorted(order) == tiles  # all kept, once
     assert spread_first(tiles, 20).indices == tiles  # sampling all: order unchanged
     assert spread_first(tiles, 0).indices == tiles  # no sampling
+
+
+@pytest.mark.parametrize("sit", [False, True])
+def test_export_matches_translate(tmp_path, sit):
+    ort = pytest.importorskip("onnxruntime")
+    import json
+
+    from pathotrain.pathogen.export import export
+
+    cfg = _sit_cfg(tmp_path, repa=False) if sit else _cfg(tmp_path)
+    task = build_task(cfg)
+    torch.save({"model": task.model.state_dict(), "config": cfg}, tmp_path / "m.ckpt")
+    torch.manual_seed(0)  # the tiny VAE's random weights, the same in both loads
+    path = export(tmp_path / "m.ckpt", tmp_path / "m.onnx")  # checks ONNX against PyTorch
+
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    meta = json.loads(session.get_modelmeta().custom_metadata_map["pathotrain"])
+    assert meta["tile_size"] == 16 and meta["steps"] == 2
+    torch.manual_seed(0)
+    task, _ = load_model(tmp_path / "m.ckpt")
+    source = torch.rand(3, 3, 16, 16)
+    noise = torch.randn((3, 4, 8, 8), generator=torch.Generator().manual_seed(1))
+    (out,) = session.run(None, {"image": source.numpy(), "noise": noise.numpy()})
+    # The noise translate draws from the same generator: the same tiles.
+    want = task.translate(source, generator=torch.Generator().manual_seed(1))
+    assert np.abs(out - want.numpy()).max() < 1e-4
+    with pytest.raises(ValueError, match="multiple of"):
+        export(tmp_path / "m.ckpt", tmp_path / "bad.onnx", size=18)  # tiny models: x4
