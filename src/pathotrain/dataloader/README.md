@@ -209,6 +209,30 @@ tiles: an optional resize, a random (train) or centre (val) crop, and for
 training flips and 90 degree turns. It never changes colours, since the
 target's colours are what a translation model learns.
 
+### Tiles from a registered slide pair
+
+To make those folders from whole slides, register the IHC slide to its H&E
+slide (`pathotrain.registration`, see its README) and export the pairs:
+
+```python
+from patchology import TilingConfig
+from pathotrain.dataloader.registration import export_registered_tiles
+from pathotrain.registration import register
+
+reg = register("he_slides/0_HE_val.tiff", "ihc_slides/0_KI67_val.tiff")
+export_registered_tiles(reg, "tiles/train", tiling=TilingConfig(tile_size=1024, tile_mpp=1.0))
+# tiles/train/source/0_HE_val_<x>_<y>.png  H&E
+# tiles/train/target/0_HE_val_<x>_<y>.png  IHC over the same tissue
+```
+
+The H&E is tiled by `patchology.TileGenerator` (keyword arguments go to it);
+each IHC tile is read from the slide through the registration and warped onto
+the H&E tile's grid, so no warped whole slide is written. A pair is dropped
+when less than `min_target_tissue` (default 0.1) of its IHC tile is tissue,
+e.g. where the IHC section tore or lies off the slide; `tiles/<slide>.csv`
+records each kept pair's `target_tissue`. Pale fat that fills a tile scores only ~0.1-0.15,
+so raise it with care; 0 keeps every pair.
+
 ## Tests
 
 ```bash
