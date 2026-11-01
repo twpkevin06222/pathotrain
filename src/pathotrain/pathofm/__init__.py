@@ -4,7 +4,9 @@ from pathotrain.pathofm.models import (
     MIDNIGHT_STD,
     build_encoder,
     classification_embedding,
+    from_timm_dinov2,
     load_backbone,
+    num_prefix_tokens,
     segmentation_embedding,
 )
 
@@ -14,6 +16,8 @@ __all__ = [
     "MIDNIGHT_STD",
     "build_encoder",
     "classification_embedding",
+    "from_timm_dinov2",
     "load_backbone",
+    "num_prefix_tokens",
     "segmentation_embedding",
 ]

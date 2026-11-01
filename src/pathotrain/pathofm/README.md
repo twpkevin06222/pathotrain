@@ -7,21 +7,30 @@ Pathology foundation models (FMs) as backbones for downstream tasks:
 segmentation, linear probing, fine-tuning and multiple-instance learning (MIL)
 on whole slides.
 
-Only open models are included. Both are MIT licensed and not gated on Hugging
-Face, so they need no login and can be used commercially, subject to the MIT
-terms. Models with non-commercial licences, or that require access approval,
+Only open models are included. All are MIT or Apache-2.0 licensed and not
+gated on Hugging Face, so they need no login and can be used commercially,
+subject to their licence terms. Models with non-commercial licences, or that require access approval,
 are deliberately left out.
 
 | Name | Weights | What it is |
 |---|---|---|
 | `midnight-12k` | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | Midnight trained on 12k public slides |
 | `spectra-midnight-12k` | [medarc/Midnight-12k-SPECTRA](https://huggingface.co/medarc/Midnight-12k-SPECTRA) | Midnight-12k adapted with SPECTRA for robustness to scanner, stain and centre |
+| `openmidnight-1.1` | [medarc/OpenMidnight-1.1](https://huggingface.co/medarc/OpenMidnight-1.1) | OpenMidnight-1.1, an open reproduction of the Midnight recipe (Apache-2.0) |
 
-Both share one architecture:
-- DINOv2 ViT-g/14, loaded as `transformers.Dinov2Model`;
+All share one architecture:
+- DINOv2 ViT-g/14 with a SwiGLU MLP;
 - 1.1B parameters in 40 layers;
 - 1536-dim tokens;
-- patch size 14, one CLS token, no registers.
+- patch size 14.
+
+The Midnight models load as `transformers.Dinov2Model`, with one CLS token and
+no registers. `openmidnight-1.1` adds 4 register tokens after the CLS token.
+It ships as a timm checkpoint; `load_backbone` converts it on load to
+`transformers.Dinov2WithRegistersModel` (`from_timm_dinov2`; the output matches
+timm's to within 1e-5), so timm isn't needed. Its mask token starts at zero,
+because the timm checkpoint has none. Both embedding functions below skip the
+registers (`num_prefix_tokens(model)` is the CLS token plus any registers).
 
 The revisions are pinned in `FOUNDATION_MODELS`, so the weights never change
 under a run.
@@ -38,12 +47,13 @@ backbone, transform = build_encoder("spectra-midnight-12k")  # + model-card prep
 - **Download:** the first call downloads the weights (about 4.5 GB per model)
   into the Hugging Face cache, `~/.cache/huggingface` by default. Set `HF_HOME`
   to put the cache elsewhere.
-- **Normalisation:** both models use mean = std = 0.5 (`MIDNIGHT_MEAN`,
-  `MIDNIGHT_STD`), not ImageNet statistics. Using the wrong normalisation
-  silently degrades every downstream result.
-- **`transform`:** the model card's preprocessing for a PIL tile. It does a
-  bilinear resize to 224, a centre crop to 224, `ToTensor` and the 0.5
-  normalisation.
+- **Normalisation:** the Midnight models use mean = std = 0.5 (`MIDNIGHT_MEAN`,
+  `MIDNIGHT_STD`), not ImageNet statistics; `openmidnight-1.1` uses ImageNet's.
+  Each model's values are in `FOUNDATION_MODELS[name].mean` / `.std`. Using
+  the wrong normalisation silently degrades every downstream result.
+- **`transform`:** the model card's preprocessing for a PIL tile. Midnight:
+  bilinear resize to 224, centre crop to 224. OpenMidnight: bicubic resize to
+  256, centre crop to 224. Then `ToTensor` and the model's normalisation.
 - **Inference:** run the frozen backbone under
   `torch.inference_mode()` and `torch.autocast("cuda", torch.bfloat16)`.
   bf16 halves the memory and is how the model cards run it.
@@ -104,7 +114,7 @@ backbone = load_backbone("midnight-12k").cuda().eval()
 
 @torch.inference_mode()
 def embed_tiles(loader):
-    """loader yields (tiles, coords): tiles normalised with 0.5 mean/std."""
+    """loader yields (tiles, coords): tiles normalised with the model's mean/std."""
     feats, xy = [], []
     for tiles, coords in loader:
         with torch.autocast("cuda", torch.bfloat16):
@@ -125,8 +135,8 @@ the model expects.
 
 Linear probing measures how good the frozen features are: train a single
 linear layer on the saved embeddings, and leave the backbone untouched. It's
-the cheapest way to compare `midnight-12k` with `spectra-midnight-12k` on your
-data.
+the cheapest way to compare `midnight-12k`, `spectra-midnight-12k` and
+`openmidnight-1.1` on your data.
 
 ```python
 import torch
@@ -242,5 +252,5 @@ contract.
 
 ## License
 
-The code is Apache License 2.0. Both sets of model weights are MIT; see each
-model card.
+The code is Apache License 2.0. The Midnight weights are MIT and the
+OpenMidnight weights Apache-2.0; see each model card.

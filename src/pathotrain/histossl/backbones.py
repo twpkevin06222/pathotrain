@@ -1,4 +1,5 @@
-"""ViT backbones for histossl, all ``transformers.Dinov2Model``.
+"""ViT backbones for histossl, ``transformers.Dinov2Model`` (or
+``Dinov2WithRegistersModel`` for ``openmidnight-1.1``).
 
 - ``init="pretrained"``: a :mod:`pathotrain.pathofm` model (e.g. ``midnight-12k``,
   ViT-g/14) at its pinned revision.
@@ -6,7 +7,8 @@
   (as Midnight: a 224 px tile is 16 x 16 tokens) or 16 px (14 x 14).
 
 Masked tokens use Dinov2's own ``bool_masked_pos``: the patch embeddings at masked
-positions are replaced by the model's ``mask_token`` (pretrained in Midnight).
+positions are replaced by the model's ``mask_token`` (pretrained in Midnight;
+zero in OpenMidnight, whose timm checkpoint has none).
 
 Each backbone carries its preprocessing on its config (``config.preprocessing``:
 ``input_size`` and ``mean`` / ``std`` on ``[0, 1]`` pixels), so it survives peft
@@ -17,7 +19,13 @@ import torch
 from torch import Tensor
 from transformers import Dinov2Config, Dinov2Model
 
-from pathotrain.pathofm import FOUNDATION_MODELS, MIDNIGHT_MEAN, MIDNIGHT_STD, load_backbone
+from pathotrain.pathofm import (
+    FOUNDATION_MODELS,
+    MIDNIGHT_MEAN,
+    MIDNIGHT_STD,
+    load_backbone,
+    num_prefix_tokens,
+)
 
 DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
 
@@ -133,6 +141,7 @@ def normalisation(init: str, id: str | None = None) -> tuple[tuple, tuple]:
 def tokens(model, pixel_values: Tensor, mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
     """The final (LayerNorm'd) CLS token ``(B, D)`` and patch tokens ``(B, N, D)``
     of ``pixel_values``, with patches where ``mask`` (bool ``(B, N)``) is True
-    replaced by the mask token. ``model`` may be wrapped by peft."""
+    replaced by the mask token; registers are left out. ``model`` may be wrapped
+    by peft."""
     hidden = model(pixel_values=pixel_values, bool_masked_pos=mask).last_hidden_state
-    return hidden[:, 0], hidden[:, 1:]
+    return hidden[:, 0], hidden[:, num_prefix_tokens(model) :]
