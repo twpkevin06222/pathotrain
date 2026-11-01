@@ -147,6 +147,27 @@ def test_teacher_jepa_learns_the_teacher_tokens(tmp_path, monkeypatch):
     assert not task.model.teacher.training
 
 
+def test_teacher_jepa_weighs_masked_and_visible_losses(tmp_path, monkeypatch):
+    monkeypatch.setattr(teacher_jepa, "build_backbone", _tiny)
+    images = torch.rand(4, 3, 56, 56)
+    cfg = _cfg(tmp_path, {"type": "last_n", "n": 1})
+
+    def losses(**weights):
+        task = build_task({**cfg, "method": {**cfg["method"], **weights}}).eval()
+        return task._losses(images, torch.Generator().manual_seed(0))
+
+    both = losses()
+    assert set(both) == {"loss", "masked_loss", "visible_loss", "masked_cosine", "visible_cosine"}
+    assert torch.allclose(both["loss"], both["masked_loss"] + both["visible_loss"])
+    assert all(-1 <= both[k] <= 1 for k in ("masked_cosine", "visible_cosine"))
+    masked_only = losses(visible_weight=0.0)  # the original objective
+    assert torch.allclose(masked_only["loss"], both["masked_loss"])
+    weighted = losses(masked_weight=2.0, visible_weight=0.5)
+    assert torch.allclose(weighted["loss"], 2 * both["masked_loss"] + 0.5 * both["visible_loss"])
+    with pytest.raises(ValueError, match="not both 0"):
+        losses(masked_weight=0.0, visible_weight=0.0)
+
+
 def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     import mlflow
 
