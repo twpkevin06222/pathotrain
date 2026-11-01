@@ -69,6 +69,7 @@ def test_train_from_config_and_rebuild_model_from_checkpoint(tmp_path, monkeypat
     metrics = train(cfg)
     assert {"val/miou", "val/loss"} <= metrics.keys()
     assert (tmp_path / "run/config.yaml").exists() and (tmp_path / "run/logs").is_dir()
+    assert "epoch 1/" in (tmp_path / "run/train.log").read_text()
 
     model, saved = load_model(tmp_path / "run/checkpoints/best.ckpt")
     assert saved == cfg
