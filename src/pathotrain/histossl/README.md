@@ -223,6 +223,45 @@ MHIST ships one CSV for both splits (`Image Name`, `Majority Vote Label`,
 `Partition`); split it into `train.csv` and `test.csv` with `path,label`
 columns first. A self-supervised run should beat the first row to have helped.
 
+## Dense probe
+
+The tile embedding (CLS + mean patch) can hide drift in the patch tokens, so a
+dense probe checks them directly: a linear classifier per patch token on frozen
+features, scored by mIoU.
+
+```bash
+python -m pathotrain.histossl.eval.dense_probe midnight-12k \
+    --train tiger224/train --test tiger224/val
+```
+
+- Data: folders written by `pathotrain.dataloader.export_segmentation_tiles`,
+  tiles a multiple of the patch size (224 px), not resized.
+- Each patch token is labelled with the majority class of its 14 x 14 pixels;
+  pixels outside the ROI (255) do not vote, and a patch with under half its
+  pixels labelled is skipped.
+- Logistic regression (L-BFGS) on standardised tokens of `--max-tiles` (1000)
+  evenly spaced train tiles; L2 picked by mIoU on 20% of the train tiles, then
+  scored on every test tile.
+- Metrics under `dense/`: `miou` (over the classes present in test), `acc`,
+  `iou_<class>`. In Python: `pathotrain.histossl.eval.dense_probe.evaluate_dense`.
+- During training: `eval.dense_train` and `eval.dense_test` add it to the
+  probe; `checkpoint.monitor` may be a `dense/` metric.
+
+Baselines on TIGER (breast cancer, TCGA; 224 px at 0.5 µm/px, tiles at least
+80% annotated; 97 train / 25 test slides, 7891 / 2076 tiles), exported with
+`class_map` 1 invasive tumour, 2 tumour-associated stroma, 3 in-situ tumour,
+4 healthy glands, 5 necrosis, 6 inflamed stroma, 7 rest (0: unannotated
+background), `roi_class: roi`, `object_mask_overlap: 0.8`:
+
+| Backbone | mIoU | patch acc |
+|---|---|---|
+| midnight-12k | 0.432 | 0.720 |
+| openmidnight-1.1 | 0.437 | 0.740 |
+
+mIoU is noisy here: healthy glands are 0.04% of test pixels and background
+0.3%, and both score low. Patch accuracy and the IoU of the large classes are
+steadier for comparing runs.
+
 ## Tests
 
 ```bash

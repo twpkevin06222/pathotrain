@@ -1,3 +1,5 @@
+import functools
+
 import numpy as np
 import pytest
 import torch
@@ -222,6 +224,71 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
             + ["--num-workers", "0", "--k", "3"]
         )
     assert json.loads(printed.getvalue())["probe/acc"] == 1.0  # dark vs bright tiles
+
+
+def _seg_tiles(d, n, seed=0):
+    """56 px tiles, dark left half (class 1) and bright right half (class 2), the
+    top-left patch outside the ROI (255)."""
+    rng = np.random.default_rng(seed)
+    (d / "images").mkdir(parents=True)
+    (d / "masks").mkdir()
+    mask = np.ones((56, 56), np.uint8)
+    mask[:, 28:] = 2
+    mask[:14, :14] = 255
+    for i in range(n):
+        tile = rng.normal(40, 20, (56, 56, 3))
+        tile[:, 28:] += 180
+        Image.fromarray(np.clip(tile, 0, 255).astype(np.uint8)).save(d / "images" / f"t{i}.png")
+        Image.fromarray(mask).save(d / "masks" / f"t{i}.png")
+    return d
+
+
+def test_patch_labels_take_the_majority_and_skip_unlabelled_patches():
+    from pathotrain.histossl.eval.dense_probe import patch_labels
+
+    mask = torch.zeros(1, 28, 28, dtype=torch.long)
+    mask[:, :14, 14:] = 3
+    mask[:, :14, 14:16] = 1  # a minority in the top-right patch
+    mask[:, 14:, :14] = 255  # bottom-left: outside the ROI
+    mask[:, 14:, 14:] = 255
+    mask[:, 14:22, 14:] = 2  # bottom-right: 8 of 14 rows labelled, over half
+    assert patch_labels(mask, 14).tolist() == [[0, 3, 255, 2]]
+
+
+def test_dense_probe_reads_patch_classes_from_frozen_tokens(tmp_path):
+    from pathotrain.dataloader import SegmentationTileFolderDataset
+    from pathotrain.histossl.eval.dense_probe import dense_transform, evaluate_dense
+
+    transform = dense_transform((0.5,) * 3, (0.5,) * 3)
+    train = _seg_tiles(tmp_path / "train", 6)
+    test = _seg_tiles(tmp_path / "test", 3, seed=1)
+    load = functools.partial(SegmentationTileFolderDataset, transform=transform)
+    metrics = evaluate_dense(
+        _tiny(grad_checkpointing=False),
+        load(images=train / "images", masks=train / "masks"),
+        load(images=test / "images", masks=test / "masks"),
+        max_tiles=5,
+        num_workers=0,
+    )
+    assert metrics["dense/miou"] == metrics["dense/acc"] == 1.0  # dark vs bright patches
+    assert {"dense/iou_1", "dense/iou_2"} <= metrics.keys() and "dense/iou_0" not in metrics
+
+
+def test_eval_section_adds_the_dense_probe(tmp_path, monkeypatch):
+    from pathotrain.histossl.train import build_probe
+
+    cfg = _cfg(tmp_path)
+    for split, n in (("train", 4), ("test", 2)):
+        d = _seg_tiles(tmp_path / "seg" / split, n)
+        with open(d / "tiles.csv", "w") as f:  # export_segmentation_tiles' layout
+            f.write("image,mask,slide,x,y\n")
+            f.writelines(f"images/t{i}.png,masks/t{i}.png,s,0,0\n" for i in range(n))
+    dense = {"dense_train": str(tmp_path / "seg/train"), "dense_test": str(tmp_path / "seg/test")}
+    with pytest.raises(ConfigError, match="dense_train and eval.dense_test"):
+        validate({**cfg, "eval": {**cfg["eval"], "dense_train": dense["dense_train"]}})
+    probe = build_probe(validate({**cfg, "eval": {**cfg["eval"], **dense}}))
+    metrics = probe(_tiny(grad_checkpointing=False))
+    assert {"probe/balanced_acc", "knn/balanced_acc", "dense/miou"} <= metrics.keys()
 
 
 def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():

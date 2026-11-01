@@ -194,6 +194,20 @@ def _dataset(spec: str, root: str | None, transform, class_names=None) -> ClassT
     return ClassTileDataset(spec, transform, class_names=class_names)
 
 
+def load_encoder(spec: str) -> nn.Module:
+    """The backbone named by ``spec`` (a pathofm id, a histossl ``.ckpt`` or a
+    folder written by :mod:`pathotrain.histossl.export`), on CUDA if available."""
+    if spec.endswith(".ckpt"):
+        from pathotrain.histossl.train import load_backbone
+
+        model, _ = load_backbone(spec)
+    elif Path(spec).is_dir():
+        model = AutoModel.from_pretrained(spec)
+    else:
+        model = build_backbone("pretrained", id=spec, grad_checkpointing=False)
+    return model.to("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
@@ -208,15 +222,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args(argv)
-    if args.backbone.endswith(".ckpt"):
-        from pathotrain.histossl.train import load_backbone
-
-        model, _ = load_backbone(args.backbone)
-    elif Path(args.backbone).is_dir():
-        model = AutoModel.from_pretrained(args.backbone)
-    else:
-        model = build_backbone("pretrained", id=args.backbone, grad_checkpointing=False)
-    model.to("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_encoder(args.backbone)
     pp = preprocessing(model)  # what the backbone was trained on
     transform = probe_transform(pp["mean"], pp["std"], pp["input_size"])
     train = _dataset(args.train, args.root, transform)
