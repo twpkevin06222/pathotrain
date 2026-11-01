@@ -49,7 +49,7 @@ trainer:
   precision: bf16-mixed
   grad_clip: 3.0
 loader:
-  batch_size: 32            # x (2 global + 8 local) views
+  batch_size: 64            # x (2 global + 8 local) views; ~20 GiB with the bfloat16 trunk
   num_workers: 8
 
 data:

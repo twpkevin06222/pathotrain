@@ -74,9 +74,17 @@ python -m pathotrain.histossl.eval.linear_probe runs/jepa01/checkpoints/best.ckp
 
 The student (Midnight with LoRA, or its last N blocks) sees each tile with
 40-60% of its patches block-masked; a small transformer predictor maps the
-student's tokens to the frozen teacher's final patch tokens, and the loss is
-smooth L1 at the masked patches (targets layer-normalised per token). With LoRA
-the teacher is the student with its adapters off, so Midnight is held once.
+student's tokens to the frozen teacher's final patch tokens. With LoRA the
+teacher is the student with its adapters off, so Midnight is held once.
+
+- Loss: `masked_weight * masked + visible_weight * visible` (both 1.0 by
+  default), each smooth L1 against the teacher's tokens layer-normalised per
+  token, averaged over its own patches. The masked term makes the student infer
+  hidden patches from context; the visible term keeps its features near
+  Midnight's. `visible_weight: 0` is the masked-only objective.
+- Logged per step: `train/masked_loss`, `train/visible_loss` and the cosine
+  similarity of prediction and target, `train/masked_cosine` and
+  `train/visible_cosine` (1 when the student matches the teacher).
 
 - The config is checked before anything loads: unknown keys, and combinations
   a method cannot run (LoRA from scratch, an EMA teacher for teacher_jepa or

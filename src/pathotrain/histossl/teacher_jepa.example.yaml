@@ -13,6 +13,8 @@ method:
   width: 384                # predictor: a narrow transformer over the student's tokens
   depth: 6
   heads: 6
+  masked_weight: 1.0        # loss on the masked patches (inferred from context)
+  visible_weight: 1.0       # loss on the visible ones (keeps features near Midnight's)
 backbone:
   init: pretrained
   id: midnight-12k          # or spectra-midnight-12k

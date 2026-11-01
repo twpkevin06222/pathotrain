@@ -2,10 +2,16 @@
 
 The teacher (frozen Midnight) sees the whole view; the student sees the same
 view with block-masked patches replaced by its mask token, and a small
-transformer predictor maps the student's tokens to the teacher's. The loss is
-smooth L1 at the masked patches against the teacher's final patch tokens,
-layer-normalised per token (as data2vec normalises its targets, Baevski et al.
-2022). This follows the stage-2 recipe described for GenBio-PathFM (continued
+transformer predictor maps the student's tokens to the teacher's. Two losses,
+each smooth L1 against the teacher's final patch tokens layer-normalised per
+token (as data2vec normalises its targets, Baevski et al. 2022) and averaged
+over its own patches:
+
+- masked: the hidden patches, which the student must infer from their context;
+- visible: the patches it sees, which keeps its features close to the teacher's.
+
+The loss is ``masked_weight * masked + visible_weight * visible``; the cosine
+similarity of prediction and target is logged per region too. This follows the stage-2 recipe described for GenBio-PathFM (continued
 pretraining against a frozen teacher); no code was ported from it, nor from
 I-JEPA (Assran et al. 2023, CC-BY-NC), whose predictor idea this borrows.
 
@@ -84,7 +90,10 @@ class TeacherJEPAModel(nn.Module):
 class TeacherJEPATask(SSLTask):
     """Train a :class:`TeacherJEPAModel` (see the module docstring); ``masking``
     is ``block`` or ``random``, ``ratio`` the masked fraction ``(low, high)``,
-    ``p`` the share of views block-masked at all. Other arguments as for :class:`SSLTask`."""
+    ``p`` the share of views block-masked at all, ``masked_weight`` and
+    ``visible_weight`` the two losses' weights. Logs ``masked_loss``,
+    ``visible_loss``, ``masked_cosine`` and ``visible_cosine``. Other arguments as
+    for :class:`SSLTask`."""
 
     def __init__(
         self,
@@ -93,9 +102,17 @@ class TeacherJEPATask(SSLTask):
         ratio: tuple[float, float] = (0.4, 0.6),
         min_aspect: float = 0.3,
         p: float = 1.0,
+        masked_weight: float = 1.0,
+        visible_weight: float = 1.0,
         **kwargs,
     ) -> None:
         super().__init__(model, **kwargs)
+        if masked_weight < 0 or visible_weight < 0 or masked_weight + visible_weight == 0:
+            raise ValueError(
+                f"masked_weight and visible_weight must be >= 0 and not both 0, "
+                f"got {masked_weight}, {visible_weight}"
+            )
+        self.masked_weight, self.visible_weight = masked_weight, visible_weight
         if masking == "block":
             self.mask_fn = functools.partial(block_mask, ratio=ratio, min_aspect=min_aspect, p=p)
         else:
@@ -108,14 +125,30 @@ class TeacherJEPATask(SSLTask):
         mask = torch.stack([self.mask_fn(grid, generator=generator) for _ in images])
         mask = mask.to(images.device)
         predicted, target = self.model(images, mask)
+        predicted = predicted.float()
         target = F.layer_norm(target.float(), target.shape[-1:])
-        return {"loss": F.smooth_l1_loss(predicted.float()[mask], target[mask])}
+        out = {}
+        for region, where in (("masked", mask), ("visible", ~mask)):
+            if where.any():
+                pred, goal = predicted[where], target[where]
+                out[f"{region}_loss"] = F.smooth_l1_loss(pred, goal)
+                with torch.no_grad():
+                    out[f"{region}_cosine"] = F.cosine_similarity(pred, goal, dim=-1).mean()
+            else:  # no patch in this region (every view unmasked, or ratio 1)
+                # Every key on every step: the trainer averages logs by key across ranks.
+                out[f"{region}_loss"] = predicted.new_zeros(())
+                out[f"{region}_cosine"] = predicted.new_zeros(())
+        loss = self.masked_weight * out["masked_loss"] + self.visible_weight * out["visible_loss"]
+        return {"loss": loss, **out}
 
 
 def build(cfg, ssl, probe=None) -> TeacherJEPATask:
     """The task of a validated config: ``cfg`` the experiment dict, ``ssl`` its
     :class:`~pathotrain.histossl.config.SSLConfig`. Method params: the predictor's
-    ``width``, ``depth`` and ``heads``."""
+    ``width``, ``depth`` and ``heads``, and the losses' ``masked_weight`` and
+    ``visible_weight``."""
+    params = dict(ssl.method.params)
+    weights = {k: params.pop(k) for k in ("masked_weight", "visible_weight") if k in params}
     bb, ad = ssl.backbone, ssl.adaptation
     backbone = build_backbone(
         bb.init, bb.id, bb.arch, bb.grad_checkpointing, bb.dtype, ssl.crops.global_size
@@ -132,7 +165,7 @@ def build(cfg, ssl, probe=None) -> TeacherJEPATask:
                 "pretrained", teacher_id, None, False, bb.dtype, ssl.crops.global_size
             )
     student = apply_adaptation(backbone, ad.type, ad.n, ad.rank, ad.alpha, ad.dropout, ad.targets)
-    predictor = Predictor(backbone.config.hidden_size, **ssl.method.params)
+    predictor = Predictor(backbone.config.hidden_size, **params)
     m = ssl.masking
     return TeacherJEPATask(
         TeacherJEPAModel(student, predictor, teacher),
@@ -140,6 +173,7 @@ def build(cfg, ssl, probe=None) -> TeacherJEPATask:
         ratio=m.ratio,
         min_aspect=m.min_aspect,
         p=m.p,
+        **weights,
         seed=cfg.get("seed", 0),
         probe=probe,
         probe_every=ssl.eval.every if ssl.eval is not None else 1,
