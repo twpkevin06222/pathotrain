@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from transformers import Dinov2Config, Dinov2Model
 
@@ -224,7 +225,7 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
 
 
 def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
-    from pathotrain.histossl.methods.dinov2 import DINOHead, koleo, sinkhorn_knopp
+    from pathotrain.histossl.methods.dinov2 import DINOHead, kde, koleo, sinkhorn_knopp
 
     scores = torch.rand(64, 8) * 2 - 1  # cosines, as DINOHead scores
     scores[:, 0] += 0.5  # one prototype favoured
@@ -233,6 +234,11 @@ def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
     assert torch.allclose(q.sum(0), torch.full((8,), 64 / 8), atol=0.1)  # prototypes used evenly
     spread, clump = torch.eye(8), torch.ones(8, 8) + 0.01 * torch.randn(8, 8)
     assert koleo(spread) < koleo(clump)
+    assert kde(spread) < kde(clump)
+    # OpenMidnight's KDELoss: mean log sum_j exp(kappa * cos_ij).
+    x = torch.randn(16, 8)
+    xn = F.normalize(x, dim=-1)
+    assert torch.allclose(kde(x), torch.log(torch.exp(5 * xn @ xn.T).sum(1)).mean(), atol=1e-5)
     head = DINOHead(32, prototypes=10, hidden_dim=16, bottleneck_dim=8)
     assert head(torch.randn(3, 32)).abs().max() <= 1 + 1e-5  # unit-norm prototypes: cosines
     assert not head.last_layer.parametrizations.weight.original0.requires_grad
@@ -270,6 +276,26 @@ def test_dinov2_config_rules(tmp_path):
         validate({**cfg, "data": {**cfg["data"], "crops": {"global_crops": 1}}})
     with pytest.raises(ConfigError, match="teacher.type in \\['ema'\\]"):
         validate({**cfg, "teacher": {"type": "frozen"}})
+    om = load_config(files("pathotrain.histossl") / "dinov2_openmidnight.example.yaml")
+    assert validate(om).backbone.id == "openmidnight-1.1"
+
+
+def test_dinov2_openmidnight_recipe_heads_and_kde(tmp_path, monkeypatch):
+    from pathotrain.histossl.methods import dinov2
+
+    monkeypatch.setattr(dinov2, "build_backbone", _tiny)
+    cfg = _dinov2_cfg(tmp_path)
+    method = {**cfg["method"], "koleo_weight": 0, "kde_weight": 0.05}
+    om = {**method, "separate_ibot_head": True, "ibot_head": {"bottleneck_dim": 4}}
+    task = build_task({**cfg, "method": om})
+    assert task.model.ibot_head.last_layer.in_features == 4  # its own bottleneck
+    assert task.model.dino_head.last_layer.in_features == 8
+    batch = {"global": torch.rand(2, 2, 3, 56, 56), "local": torch.rand(2, 2, 3, 28, 28)}
+    out = task._losses(batch, torch.Generator().manual_seed(0))
+    want = out["dino_loss"] + out["ibot_loss"] + 0.05 * out["kde_loss"]
+    assert torch.allclose(out["loss"], want)  # KoLeo off, KDE on
+    with pytest.raises(ValueError, match="separate_ibot_head"):
+        build_task({**cfg, "method": {**method, "ibot_head": {"bottleneck_dim": 4}}})
 
 
 def test_dinov2_trains_the_ema_teacher_and_resumes(tmp_path, monkeypatch):

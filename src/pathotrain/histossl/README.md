@@ -115,6 +115,19 @@ masked patches) and KoLeo (spread of the global CLS tokens). Teacher targets
 are Sinkhorn-Knopp centred. The head, centring and KoLeo are adapted from
 facebookresearch/dinov2 (Apache-2.0).
 
+- KoLeo or KDE: `kde_weight` adds Midnight's KDE entropy term (a von
+  Mises-Fisher kernel, kappa 5, over the global CLS tokens; adapted from
+  MedARC-AI/OpenMidnight, Apache-2.0), usually with `koleo_weight: 0`. Either is
+  computed per global view and summed over views, as DINOv2 does.
+- `ibot_head: {bottleneck_dim: 256}` (with `separate_ibot_head: true`) gives
+  the iBOT head its own head params.
+- `dinov2_openmidnight.example.yaml` is OpenMidnight's recipe on
+  `openmidnight-1.1` with LoRA: KDE 0.05 and no KoLeo, 131072 prototypes in
+  both heads (DINO bottleneck 384, iBOT 256), iBOT mask ratio 0.1-0.45.
+  Batch 64 reserves 25.6 GiB (bf16 trunk). OpenMidnight fine-tunes every
+  weight on 8 GPUs at 2e-4 x sqrt(batch / 1024) and stops early because longer
+  runs hurt; here LoRA keeps 1e-4, and `best.ckpt` is chosen by the probe.
+
 - Midnight has no DINO heads, so they start from scratch: their last layer is
   held for `freeze_last_layer_epochs` (1), and `head_warmup_epochs` can train
   the heads alone first.
