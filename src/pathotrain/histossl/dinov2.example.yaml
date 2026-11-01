@@ -21,6 +21,7 @@ method:
   dino_weight: 1.0
   ibot_weight: 1.0
   koleo_weight: 0.1
+  kde_weight: 0.0           # Midnight's KDE regulariser instead: see dinov2_openmidnight.example.yaml
   freeze_last_layer_epochs: 1  # heads start from scratch: hold their last layer first
   head_warmup_epochs: 0        # > 0: train only the heads first, backbone frozen
 backbone:
@@ -75,3 +76,5 @@ eval:
   train: mhist/train.csv    # example
   test: mhist/test.csv
   every: 1
+  # dense_train: tiger224/train  # dense probe on export_segmentation_tiles folders
+  # dense_test: tiger224/val

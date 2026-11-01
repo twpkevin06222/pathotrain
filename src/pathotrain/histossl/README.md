@@ -115,6 +115,19 @@ masked patches) and KoLeo (spread of the global CLS tokens). Teacher targets
 are Sinkhorn-Knopp centred. The head, centring and KoLeo are adapted from
 facebookresearch/dinov2 (Apache-2.0).
 
+- KoLeo or KDE: `kde_weight` adds Midnight's KDE entropy term (a von
+  Mises-Fisher kernel, kappa 5, over the global CLS tokens; adapted from
+  MedARC-AI/OpenMidnight, Apache-2.0), usually with `koleo_weight: 0`. Either is
+  computed per global view and summed over views, as DINOv2 does.
+- `ibot_head: {bottleneck_dim: 256}` (with `separate_ibot_head: true`) gives
+  the iBOT head its own head params.
+- `dinov2_openmidnight.example.yaml` is OpenMidnight's recipe on
+  `openmidnight-1.1` with LoRA: KDE 0.05 and no KoLeo, 131072 prototypes in
+  both heads (DINO bottleneck 384, iBOT 256), iBOT mask ratio 0.1-0.45.
+  Batch 64 reserves 25.6 GiB (bf16 trunk). OpenMidnight fine-tunes every
+  weight on 8 GPUs at 2e-4 x sqrt(batch / 1024) and stops early because longer
+  runs hurt; here LoRA keeps 1e-4, and `best.ckpt` is chosen by the probe.
+
 - Midnight has no DINO heads, so they start from scratch: their last layer is
   held for `freeze_last_layer_epochs` (1), and `head_warmup_epochs` can train
   the heads alone first.
@@ -209,6 +222,45 @@ SSA, 224 px; 2175 train / 977 test tiles, official split):
 MHIST ships one CSV for both splits (`Image Name`, `Majority Vote Label`,
 `Partition`); split it into `train.csv` and `test.csv` with `path,label`
 columns first. A self-supervised run should beat the first row to have helped.
+
+## Dense probe
+
+The tile embedding (CLS + mean patch) can hide drift in the patch tokens, so a
+dense probe checks them directly: a linear classifier per patch token on frozen
+features, scored by mIoU.
+
+```bash
+python -m pathotrain.histossl.eval.dense_probe midnight-12k \
+    --train tiger224/train --test tiger224/val
+```
+
+- Data: folders written by `pathotrain.dataloader.export_segmentation_tiles`,
+  tiles a multiple of the patch size (224 px), not resized.
+- Each patch token is labelled with the majority class of its 14 x 14 pixels;
+  pixels outside the ROI (255) do not vote, and a patch with under half its
+  pixels labelled is skipped.
+- Logistic regression (L-BFGS) on standardised tokens of `--max-tiles` (1000)
+  evenly spaced train tiles; L2 picked by mIoU on 20% of the train tiles, then
+  scored on every test tile.
+- Metrics under `dense/`: `miou` (over the classes present in test), `acc`,
+  `iou_<class>`. In Python: `pathotrain.histossl.eval.dense_probe.evaluate_dense`.
+- During training: `eval.dense_train` and `eval.dense_test` add it to the
+  probe; `checkpoint.monitor` may be a `dense/` metric.
+
+Baselines on TIGER (breast cancer, TCGA; 224 px at 0.5 µm/px, tiles at least
+80% annotated; 97 train / 25 test slides, 7891 / 2076 tiles), exported with
+`class_map` 1 invasive tumour, 2 tumour-associated stroma, 3 in-situ tumour,
+4 healthy glands, 5 necrosis, 6 inflamed stroma, 7 rest (0: unannotated
+background), `roi_class: roi`, `object_mask_overlap: 0.8`:
+
+| Backbone | mIoU | patch acc |
+|---|---|---|
+| midnight-12k | 0.432 | 0.720 |
+| openmidnight-1.1 | 0.437 | 0.740 |
+
+mIoU is noisy here: healthy glands are 0.04% of test pixels and background
+0.3%, and both score low. Patch accuracy and the IoU of the large classes are
+steadier for comparing runs.
 
 ## Tests
 

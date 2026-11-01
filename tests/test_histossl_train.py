@@ -1,6 +1,9 @@
+import functools
+
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from transformers import Dinov2Config, Dinov2Model
 
@@ -223,8 +226,73 @@ def test_train_probes_checkpoints_and_reloads(tmp_path, monkeypatch):
     assert json.loads(printed.getvalue())["probe/acc"] == 1.0  # dark vs bright tiles
 
 
+def _seg_tiles(d, n, seed=0):
+    """56 px tiles, dark left half (class 1) and bright right half (class 2), the
+    top-left patch outside the ROI (255)."""
+    rng = np.random.default_rng(seed)
+    (d / "images").mkdir(parents=True)
+    (d / "masks").mkdir()
+    mask = np.ones((56, 56), np.uint8)
+    mask[:, 28:] = 2
+    mask[:14, :14] = 255
+    for i in range(n):
+        tile = rng.normal(40, 20, (56, 56, 3))
+        tile[:, 28:] += 180
+        Image.fromarray(np.clip(tile, 0, 255).astype(np.uint8)).save(d / "images" / f"t{i}.png")
+        Image.fromarray(mask).save(d / "masks" / f"t{i}.png")
+    return d
+
+
+def test_patch_labels_take_the_majority_and_skip_unlabelled_patches():
+    from pathotrain.histossl.eval.dense_probe import patch_labels
+
+    mask = torch.zeros(1, 28, 28, dtype=torch.long)
+    mask[:, :14, 14:] = 3
+    mask[:, :14, 14:16] = 1  # a minority in the top-right patch
+    mask[:, 14:, :14] = 255  # bottom-left: outside the ROI
+    mask[:, 14:, 14:] = 255
+    mask[:, 14:22, 14:] = 2  # bottom-right: 8 of 14 rows labelled, over half
+    assert patch_labels(mask, 14).tolist() == [[0, 3, 255, 2]]
+
+
+def test_dense_probe_reads_patch_classes_from_frozen_tokens(tmp_path):
+    from pathotrain.dataloader import SegmentationTileFolderDataset
+    from pathotrain.histossl.eval.dense_probe import dense_transform, evaluate_dense
+
+    transform = dense_transform((0.5,) * 3, (0.5,) * 3)
+    train = _seg_tiles(tmp_path / "train", 6)
+    test = _seg_tiles(tmp_path / "test", 3, seed=1)
+    load = functools.partial(SegmentationTileFolderDataset, transform=transform)
+    metrics = evaluate_dense(
+        _tiny(grad_checkpointing=False),
+        load(images=train / "images", masks=train / "masks"),
+        load(images=test / "images", masks=test / "masks"),
+        max_tiles=5,
+        num_workers=0,
+    )
+    assert metrics["dense/miou"] == metrics["dense/acc"] == 1.0  # dark vs bright patches
+    assert {"dense/iou_1", "dense/iou_2"} <= metrics.keys() and "dense/iou_0" not in metrics
+
+
+def test_eval_section_adds_the_dense_probe(tmp_path, monkeypatch):
+    from pathotrain.histossl.train import build_probe
+
+    cfg = _cfg(tmp_path)
+    for split, n in (("train", 4), ("test", 2)):
+        d = _seg_tiles(tmp_path / "seg" / split, n)
+        with open(d / "tiles.csv", "w") as f:  # export_segmentation_tiles' layout
+            f.write("image,mask,slide,x,y\n")
+            f.writelines(f"images/t{i}.png,masks/t{i}.png,s,0,0\n" for i in range(n))
+    dense = {"dense_train": str(tmp_path / "seg/train"), "dense_test": str(tmp_path / "seg/test")}
+    with pytest.raises(ConfigError, match="dense_train and eval.dense_test"):
+        validate({**cfg, "eval": {**cfg["eval"], "dense_train": dense["dense_train"]}})
+    probe = build_probe(validate({**cfg, "eval": {**cfg["eval"], **dense}}))
+    metrics = probe(_tiny(grad_checkpointing=False))
+    assert {"probe/balanced_acc", "knn/balanced_acc", "dense/miou"} <= metrics.keys()
+
+
 def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
-    from pathotrain.histossl.methods.dinov2 import DINOHead, koleo, sinkhorn_knopp
+    from pathotrain.histossl.methods.dinov2 import DINOHead, kde, koleo, sinkhorn_knopp
 
     scores = torch.rand(64, 8) * 2 - 1  # cosines, as DINOHead scores
     scores[:, 0] += 0.5  # one prototype favoured
@@ -233,6 +301,11 @@ def test_sinkhorn_balances_prototypes_and_koleo_rewards_spread():
     assert torch.allclose(q.sum(0), torch.full((8,), 64 / 8), atol=0.1)  # prototypes used evenly
     spread, clump = torch.eye(8), torch.ones(8, 8) + 0.01 * torch.randn(8, 8)
     assert koleo(spread) < koleo(clump)
+    assert kde(spread) < kde(clump)
+    # OpenMidnight's KDELoss: mean log sum_j exp(kappa * cos_ij).
+    x = torch.randn(16, 8)
+    xn = F.normalize(x, dim=-1)
+    assert torch.allclose(kde(x), torch.log(torch.exp(5 * xn @ xn.T).sum(1)).mean(), atol=1e-5)
     head = DINOHead(32, prototypes=10, hidden_dim=16, bottleneck_dim=8)
     assert head(torch.randn(3, 32)).abs().max() <= 1 + 1e-5  # unit-norm prototypes: cosines
     assert not head.last_layer.parametrizations.weight.original0.requires_grad
@@ -270,6 +343,26 @@ def test_dinov2_config_rules(tmp_path):
         validate({**cfg, "data": {**cfg["data"], "crops": {"global_crops": 1}}})
     with pytest.raises(ConfigError, match="teacher.type in \\['ema'\\]"):
         validate({**cfg, "teacher": {"type": "frozen"}})
+    om = load_config(files("pathotrain.histossl") / "dinov2_openmidnight.example.yaml")
+    assert validate(om).backbone.id == "openmidnight-1.1"
+
+
+def test_dinov2_openmidnight_recipe_heads_and_kde(tmp_path, monkeypatch):
+    from pathotrain.histossl.methods import dinov2
+
+    monkeypatch.setattr(dinov2, "build_backbone", _tiny)
+    cfg = _dinov2_cfg(tmp_path)
+    method = {**cfg["method"], "koleo_weight": 0, "kde_weight": 0.05}
+    om = {**method, "separate_ibot_head": True, "ibot_head": {"bottleneck_dim": 4}}
+    task = build_task({**cfg, "method": om})
+    assert task.model.ibot_head.last_layer.in_features == 4  # its own bottleneck
+    assert task.model.dino_head.last_layer.in_features == 8
+    batch = {"global": torch.rand(2, 2, 3, 56, 56), "local": torch.rand(2, 2, 3, 28, 28)}
+    out = task._losses(batch, torch.Generator().manual_seed(0))
+    want = out["dino_loss"] + out["ibot_loss"] + 0.05 * out["kde_loss"]
+    assert torch.allclose(out["loss"], want)  # KoLeo off, KDE on
+    with pytest.raises(ValueError, match="separate_ibot_head"):
+        build_task({**cfg, "method": {**method, "ibot_head": {"bottleneck_dim": 4}}})
 
 
 def test_dinov2_trains_the_ema_teacher_and_resumes(tmp_path, monkeypatch):

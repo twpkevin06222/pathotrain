@@ -1,7 +1,8 @@
 # DINOHead, Sinkhorn-Knopp centring and the KoLeo loss are adapted from
 # facebookresearch/dinov2 (Apache-2.0, Copyright (c) Meta Platforms, Inc. and
 # affiliates): dinov2/layers/dino_head.py, dinov2/loss/dino_clstoken_loss.py,
-# dinov2/loss/ibot_patch_loss.py and dinov2/loss/koleo_loss.py.
+# dinov2/loss/ibot_patch_loss.py and dinov2/loss/koleo_loss.py. The KDE loss is
+# adapted from MedARC-AI/OpenMidnight (Apache-2.0): dinov2/loss/kde_loss.py.
 """dinov2: continued DINOv2-style pretraining with an EMA teacher (Oquab et al. 2023).
 
 The student sees every view (``G`` global crops, iBOT-masked, and ``L`` local
@@ -12,7 +13,9 @@ unmasked global crops. Three losses, as DINOv2:
   each other global view (cross-entropy, teacher targets Sinkhorn-Knopp centred).
 - iBOT: the student's patch prototype scores at masked patches against the
   teacher's at the same patches.
-- KoLeo: spreads the student's global CLS tokens over the sphere.
+- KoLeo: spreads the student's global CLS tokens over the sphere. Or, as Midnight
+  and OpenMidnight, the KDE entropy term (``kde_weight``, with ``koleo_weight:
+  0``). Either is summed over the global views, as DINOv2 and OpenMidnight do.
 
 Midnight ships no DINO heads, so the heads start from scratch: the head's last
 layer is frozen for ``freeze_last_layer_epochs`` and, optionally, the backbone
@@ -105,6 +108,15 @@ def koleo(x: Tensor, eps: float = 1e-8) -> Tensor:
     dots.fill_diagonal_(-1)
     nearest = dots.argmax(dim=1)
     return -torch.log(F.pairwise_distance(x, x[nearest], eps=eps) + eps).mean()
+
+
+def kde(x: Tensor, kappa: float = 5.0) -> Tensor:
+    """KDE entropy term of Midnight (Karasikov et al. 2025), as OpenMidnight: the
+    mean log density of each L2-normalised row under a von Mises-Fisher kernel
+    (concentration ``kappa``) over all rows, itself included. Minus an entropy
+    estimate, so lower is more spread."""
+    x = F.normalize(x.float(), dim=-1)
+    return torch.logsumexp(kappa * (x @ x.T), dim=1).mean()
 
 
 def _cosine(start: float, end: float, step: int, total: int) -> float:
@@ -209,6 +221,7 @@ class DINOv2Task(SSLTask):
         dino_weight: float = 1.0,
         ibot_weight: float = 1.0,
         koleo_weight: float = 0.1,
+        kde_weight: float = 0.0,
         freeze_last_layer_epochs: float = 1,
         head_warmup_epochs: float = 0,
         masking: str = "block",
@@ -226,7 +239,12 @@ class DINOv2Task(SSLTask):
             teacher_temp_warmup_epochs,
             student_temp,
         )
-        self.weights = {"dino": dino_weight, "ibot": ibot_weight, "koleo": koleo_weight}
+        self.weights = {
+            "dino": dino_weight,
+            "ibot": ibot_weight,
+            "koleo": koleo_weight,
+            "kde": kde_weight,
+        }
         self.freeze_last_layer_epochs = freeze_last_layer_epochs
         self.head_warmup_epochs = head_warmup_epochs
         if masking == "block":
@@ -284,10 +302,19 @@ class DINOv2Task(SSLTask):
             ibot = (-(target * s).sum(-1) * weight).sum() / masks.any(1).sum()
         else:
             ibot = out["student_dino"].new_zeros(())
-        spread = torch.stack([koleo(c) for c in out["student_cls"].chunk(g)]).mean()
+        # Per global view (not across views of one tile), summed as DINOv2 does.
+        views = out["student_cls"].chunk(g)
+        spread = torch.stack([koleo(c) for c in views]).sum()
+        density = torch.stack([kde(c) for c in views]).sum()
         w = self.weights
-        loss = w["dino"] * dino + w["ibot"] * ibot + w["koleo"] * spread
-        return {"loss": loss, "dino_loss": dino, "ibot_loss": ibot, "koleo_loss": spread}
+        loss = w["dino"] * dino + w["ibot"] * ibot + w["koleo"] * spread + w["kde"] * density
+        return {
+            "loss": loss,
+            "dino_loss": dino,
+            "ibot_loss": ibot,
+            "koleo_loss": spread,
+            "kde_loss": density,
+        }
 
     def on_before_optimizer_step(self) -> None:
         model = self.net
@@ -322,18 +349,26 @@ HEAD_PARAMS = ("prototypes", "hidden_dim", "bottleneck_dim", "nlayers")
 
 def build(cfg, ssl, probe=None) -> DINOv2Task:
     """The task of a validated config. Method params: the heads' ``prototypes``,
-    ``hidden_dim``, ``bottleneck_dim``, ``nlayers`` and ``separate_ibot_head``; the
-    rest go to :class:`DINOv2Task` (temperatures, loss weights, warmups)."""
+    ``hidden_dim``, ``bottleneck_dim``, ``nlayers``, ``separate_ibot_head`` and
+    ``ibot_head`` (head params where a separate iBOT head differs); the rest go to
+    :class:`DINOv2Task` (temperatures, loss weights, warmups)."""
     params = dict(ssl.method.params)
     head = {k: params.pop(k) for k in HEAD_PARAMS if k in params}
     separate = params.pop("separate_ibot_head", False)
+    ibot = params.pop("ibot_head", {})
+    if (ibot and not separate) or set(ibot) - set(HEAD_PARAMS):
+        raise ValueError(
+            f"ibot_head takes {list(HEAD_PARAMS)} and needs separate_ibot_head: true, got {ibot!r}"
+        )
     bb, ad = ssl.backbone, ssl.adaptation
     backbone = build_backbone(
         bb.init, bb.id, bb.arch, bb.grad_checkpointing, bb.dtype, ssl.crops.global_size
     )
     student = apply_adaptation(backbone, ad.type, ad.n, ad.rank, ad.alpha, ad.dropout, ad.targets)
     dim = backbone.config.hidden_size
-    model = DINOv2Model(student, DINOHead(dim, **head), DINOHead(dim, **head) if separate else None)
+    model = DINOv2Model(
+        student, DINOHead(dim, **head), DINOHead(dim, **head | ibot) if separate else None
+    )
     m = ssl.masking
     return DINOv2Task(
         model,

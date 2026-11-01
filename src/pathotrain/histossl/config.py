@@ -114,7 +114,9 @@ class Crops:
 
 @dataclass(frozen=True)
 class Eval:
-    """Linear probe and kNN on labelled tiles (class folders or path,label CSVs)."""
+    """Linear probe and kNN on labelled tiles (class folders or path,label CSVs),
+    and optionally the dense probe on segmentation tiles (folders written by
+    ``export_segmentation_tiles``)."""
 
     train: str
     test: str
@@ -123,6 +125,9 @@ class Eval:
     k: int = 20
     batch_size: int = 64
     num_workers: int = 4
+    dense_train: str | None = None
+    dense_test: str | None = None
+    dense_max_tiles: int = 1000  # train tiles the dense probe fits on
 
 
 @dataclass(frozen=True)
@@ -181,6 +186,10 @@ def validate(cfg: dict) -> SSLConfig:
     evaluation = None
     if cfg.get("eval") is not None:
         evaluation = _parse(Eval, cfg["eval"], "eval", errors)
+        if evaluation is not None and (evaluation.dense_train is None) != (
+            evaluation.dense_test is None
+        ):
+            errors.append("eval.dense_train and eval.dense_test go together")
 
     if backbone is not None:
         if backbone.init == "pretrained":
@@ -280,7 +289,7 @@ def validate(cfg: dict) -> SSLConfig:
             )
 
     monitor = cfg.get("checkpoint", {}).get("monitor", "")
-    if monitor.startswith(("probe/", "knn/")) and evaluation is None:
+    if monitor.startswith(("probe/", "knn/", "dense/")) and evaluation is None:
         errors.append(f"checkpoint.monitor {monitor!r} needs an eval section")
     if evaluation is not None and "val" not in cfg.get("data", {}):
         errors.append("eval runs at validation, which needs a data.val split")

@@ -24,6 +24,7 @@ adaptation, method, git commit). Sections (``?`` marks optional ones)::
       crops?: {global_crops: 1, global_size: 224, ...}
       augmentation?: {hed: 0.05, hsv: 0.05, blur: 0.5, jpeg: 0.0}
     eval?: {train: mhist/train.csv, test: mhist/test.csv, every: 1}  # linear probe + kNN
+           # + dense_train / dense_test: tiger224/train, tiger224/val   # dense probe
 
 ``best.ckpt`` follows ``probe/balanced_acc`` with ``eval``, else ``val/loss``.
 """
@@ -44,6 +45,7 @@ from pathotrain import experiment
 from pathotrain.dataloader import (
     ClassTileDataset,
     MultiCropTransform,
+    SegmentationTileFolderDataset,
     UnlabelledSlideDataset,
     UnlabelledTileFolderDataset,
     multicrop_collate,
@@ -51,6 +53,7 @@ from pathotrain.dataloader import (
 from pathotrain.engine import load_config
 from pathotrain.histossl.backbones import normalisation
 from pathotrain.histossl.config import SSLConfig, validate
+from pathotrain.histossl.eval.dense_probe import dense_transform, evaluate_dense
 from pathotrain.histossl.eval.linear_probe import evaluate_features, probe_transform
 from pathotrain.histossl.methods import BUILDERS, SSLTask
 from pathotrain.pathofm import FOUNDATION_MODELS
@@ -92,7 +95,8 @@ def build_dataset(cfg: dict, ssl: SSLConfig, split: str) -> Dataset:
 
 
 def build_probe(ssl: SSLConfig):
-    """``probe(backbone) -> metrics`` on the ``eval`` tiles, or None without ``eval``."""
+    """``probe(backbone) -> metrics`` on the ``eval`` tiles (and the dense probe's
+    with ``dense_train``), or None without ``eval``."""
     e = ssl.eval
     if e is None:
         return None
@@ -107,9 +111,27 @@ def build_probe(ssl: SSLConfig):
     train = dataset(e.train)
     test = dataset(e.test, train.class_names)
     classes = len(train.class_names)
+    dense = None
+    if e.dense_train is not None:
+        seg = dense_transform(mean, std)
+        dense = (
+            SegmentationTileFolderDataset(e.dense_train, seg),
+            SegmentationTileFolderDataset(e.dense_test, seg),
+        )
 
     def probe(backbone: nn.Module) -> dict[str, float]:
-        return evaluate_features(backbone, train, test, classes, e.k, e.batch_size, e.num_workers)
+        metrics = evaluate_features(
+            backbone, train, test, classes, e.k, e.batch_size, e.num_workers
+        )
+        if dense is not None:
+            metrics |= evaluate_dense(
+                backbone,
+                *dense,
+                e.dense_max_tiles,
+                batch_size=e.batch_size,
+                num_workers=e.num_workers,
+            )
+        return metrics
 
     return probe
 

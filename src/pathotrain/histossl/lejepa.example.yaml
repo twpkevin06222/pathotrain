@@ -62,3 +62,5 @@ eval:
   train: mhist/train.csv    # example
   test: mhist/test.csv
   every: 5
+  # dense_train: tiger224/train  # dense probe on export_segmentation_tiles folders
+  # dense_test: tiger224/val

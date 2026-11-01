@@ -1,0 +1,82 @@
+# Experiment config for `python -m pathotrain.histossl.train config.yaml`.
+# dinov2 with OpenMidnight's recipe (MedARC-AI/OpenMidnight, configs/train/
+# vitg14_reg4.yaml): continued pretraining of OpenMidnight-1.1 (LoRA) with the
+# KDE regulariser in place of KoLeo, 131072-prototype heads and its iBOT masks.
+# Copy it, set the paths under `data` and `eval`. Values marked "OpenMidnight"
+# are theirs; the rest are this package's, scaled to one GPU.
+
+name: dinov2_om_01          # MLflow experiment name
+seed: 0
+output_dir: runs/dinov2_om_01
+# mlflow_db: ~/project/mlflow.db
+
+method:
+  name: dinov2
+  prototypes: 131072        # OpenMidnight, both heads
+  hidden_dim: 2048
+  bottleneck_dim: 384       # OpenMidnight (DINO head)
+  separate_ibot_head: true  # OpenMidnight
+  ibot_head: {bottleneck_dim: 256}  # OpenMidnight keeps DINOv2's 256 for iBOT
+  student_temp: 0.1
+  teacher_temp: [0.04, 0.07]
+  teacher_temp_warmup_epochs: 1  # OpenMidnight: 37.5k steps, longer than this run
+  dino_weight: 1.0
+  ibot_weight: 1.0
+  koleo_weight: 0.0         # OpenMidnight: KDE instead
+  kde_weight: 0.05          # OpenMidnight
+  freeze_last_layer_epochs: 1
+backbone:
+  init: pretrained
+  id: openmidnight-1.1      # or midnight-12k
+  grad_checkpointing: true
+  dtype: bfloat16           # frozen trunk (and its teacher copy) in bf16; LoRA adapters stay float32
+adaptation:
+  type: lora                # OpenMidnight fine-tunes every weight on 8 GPUs (FSDP); LoRA fits one
+  rank: 16
+teacher:
+  type: ema
+  momentum: [0.994, 1.0]    # OpenMidnight 0.994 (its cosine spans 8000 epochs, stopped at ~200)
+masking:
+  type: block
+  ratio: [0.1, 0.45]        # OpenMidnight
+  p: 0.5
+
+task:
+  # OpenMidnight: 2e-4 x sqrt(batch / 1024) for full fine-tuning (README; its yaml
+  # has 3e-4), i.e. 5e-5 at batch 64; Midnight's 3.5e-4 collapsed. LoRA trains
+  # far fewer weights and takes a higher rate.
+  lr: 1.0e-4
+  weight_decay: [0.04, 0.2]
+  warmup_epochs: 1
+trainer:
+  max_epochs: 10            # OpenMidnight stops early: longer runs hurt; keep best.ckpt by the probe
+  precision: bf16-mixed
+  grad_clip: 3.0
+loader:
+  batch_size: 64
+  num_workers: 8
+
+data:
+  train:
+    slides: [data/train/slides]               # example; or tiles: [dir, ...]
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+  val:
+    slides: [data/val/slides]                 # example
+    tiling: {tile_size: 224, tile_mpp: 0.5}
+    max_tiles: 1024
+  samples_per_epoch: 32000                    # example
+  crops:
+    global_crops: 2
+    local_crops: 8
+    global_size: 224
+    local_size: 98                            # OpenMidnight
+    global_scale: [0.32, 1.0]
+    local_scale: [0.05, 0.32]
+  augmentation: {hed: 0.05, hsv: 0.05, blur: 0.5, jpeg: 0.0}
+
+eval:
+  train: mhist/train.csv    # example
+  test: mhist/test.csv
+  every: 1
+  # dense_train: tiger224/train  # dense probe on export_segmentation_tiles folders
+  # dense_test: tiger224/val
