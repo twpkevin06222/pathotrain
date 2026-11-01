@@ -66,7 +66,7 @@ Midnight-12k with LoRA rank 16 at batch 64 (224 px, bf16):
 ## Training: teacher_jepa
 
 ```bash
-python -m pathotrain.histossl.train config.yaml   # start from teacher_jepa.example.yaml
+python -m pathotrain.histossl.train config.yaml   # start from configs/teacher_jepa.example.yaml
 python -m pathotrain.histossl.train config.yaml --resume runs/jepa01/checkpoints/last.ckpt
 python -m pathotrain.histossl.eval.linear_probe runs/jepa01/checkpoints/best.ckpt \
     --train mhist/train.csv --test mhist/test.csv
@@ -104,7 +104,7 @@ teacher is the student with its adapters off, so Midnight is held once.
 ## Training: dinov2
 
 ```bash
-python -m pathotrain.histossl.train config.yaml   # start from dinov2.example.yaml
+python -m pathotrain.histossl.train config.yaml   # start from configs/dinov2.example.yaml
 ```
 
 Continued DINOv2 pretraining (Oquab et al. 2023) of Midnight: an EMA teacher
@@ -121,7 +121,7 @@ facebookresearch/dinov2 (Apache-2.0).
   computed per global view and summed over views, as DINOv2 does.
 - `ibot_head: {bottleneck_dim: 256}` (with `separate_ibot_head: true`) gives
   the iBOT head its own head params.
-- `dinov2_openmidnight.example.yaml` is OpenMidnight's recipe on
+- `configs/dinov2_openmidnight.example.yaml` is OpenMidnight's recipe on
   `openmidnight-1.1` with LoRA: KDE 0.05 and no KoLeo, 131072 prototypes in
   both heads (DINO bottleneck 384, iBOT 256), iBOT mask ratio 0.1-0.45.
   Batch 64 reserves 25.6 GiB (bf16 trunk). OpenMidnight fine-tunes every
@@ -143,7 +143,7 @@ facebookresearch/dinov2 (Apache-2.0).
 ## Training: lejepa
 
 ```bash
-python -m pathotrain.histossl.train config.yaml   # start from lejepa.example.yaml
+python -m pathotrain.histossl.train config.yaml   # start from configs/lejepa.example.yaml
 ```
 
 LeJEPA (Balestriero & LeCun 2025): one network, no teacher, EMA or
