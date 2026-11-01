@@ -3,7 +3,7 @@
     python -m pathotrain.histossl.train config.yaml
     python -m pathotrain.histossl.train config.yaml --resume runs/jepa01/checkpoints/last.ckpt
 
-Start from ``teacher_jepa.example.yaml`` next to this module. The config is
+Start from ``configs/teacher_jepa.example.yaml`` next to this module. The config is
 checked first (:func:`pathotrain.histossl.config.validate`), then copied to
 ``<output_dir>/config.yaml``, logged to MLflow and CSV and stored in both
 checkpoints with its provenance (backbone, normalisation, input size,

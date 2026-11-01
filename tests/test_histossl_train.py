@@ -84,7 +84,7 @@ def test_example_config_is_valid():
 
     from pathotrain.engine import TrainerConfig, load_config
 
-    cfg = load_config(files("pathotrain.histossl") / "teacher_jepa.example.yaml")
+    cfg = load_config(files("pathotrain.histossl") / "configs" / "teacher_jepa.example.yaml")
     ssl = validate(cfg)
     assert ssl.method.name == "teacher_jepa" and ssl.adaptation.type == "lora"
     TrainerConfig(**cfg["trainer"])
@@ -336,14 +336,14 @@ def test_dinov2_config_rules(tmp_path):
 
     from pathotrain.engine import load_config
 
-    assert validate(load_config(files("pathotrain.histossl") / "dinov2.example.yaml"))
+    assert validate(load_config(files("pathotrain.histossl") / "configs" / "dinov2.example.yaml"))
     cfg = _dinov2_cfg(tmp_path)
     validate(cfg)
     with pytest.raises(ConfigError, match="global_crops >= 2"):
         validate({**cfg, "data": {**cfg["data"], "crops": {"global_crops": 1}}})
     with pytest.raises(ConfigError, match="teacher.type in \\['ema'\\]"):
         validate({**cfg, "teacher": {"type": "frozen"}})
-    om = load_config(files("pathotrain.histossl") / "dinov2_openmidnight.example.yaml")
+    om = load_config(files("pathotrain.histossl") / "configs" / "dinov2_openmidnight.example.yaml")
     assert validate(om).backbone.id == "openmidnight-1.1"
 
 
@@ -459,7 +459,7 @@ def test_lejepa_config_rules(tmp_path):
 
     from pathotrain.engine import load_config
 
-    assert validate(load_config(files("pathotrain.histossl") / "lejepa.example.yaml"))
+    assert validate(load_config(files("pathotrain.histossl") / "configs" / "lejepa.example.yaml"))
     cfg = _lejepa_cfg(tmp_path)
     validate(cfg)
     midnight = {"backbone": {"init": "pretrained", "id": "midnight-12k"}}

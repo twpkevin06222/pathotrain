@@ -53,7 +53,7 @@ trainer:
   precision: bf16-mixed
   grad_clip: 3.0
 loader:
-  batch_size: 64
+  batch_size: 32            # 64 runs out of memory on 32 GB: the 131072-prototype iBOT logits
   num_workers: 8
 
 data:
