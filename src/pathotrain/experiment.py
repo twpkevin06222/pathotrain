@@ -64,13 +64,21 @@ def normalisation(cfg: dict, key: str) -> tuple[float, float, float]:
     return value
 
 
+_log_sink: int | None = None
+
+
 def start(cfg: dict, resume: str | Path | None = None) -> Path:
-    """Copy ``cfg`` to ``<output_dir>/config.yaml`` and seed everything; return the copy's path.
+    """Copy ``cfg`` to ``<output_dir>/config.yaml``, log to ``<output_dir>/train.log``
+    (appended on resume) and seed everything; return the config copy's path.
 
     A changed config for an existing run is refused unless resuming (see ``dump_config``).
     """
+    global _log_sink
     # A resumed run may change the config (e.g. more epochs); record the new one.
     path = dump_config(cfg, Path(cfg["output_dir"]), overwrite=resume is not None)
+    if _log_sink is not None:  # one run per process at a time (sweeps, tests call train again)
+        logger.remove(_log_sink)
+    _log_sink = logger.add(path.parent / "train.log")
     seed_everything(cfg["seed"], workers=True)
     return path
 
