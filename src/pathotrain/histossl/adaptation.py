@@ -113,7 +113,7 @@ def merge_and_export(model: nn.Module, path: str | Path, metadata: dict | None =
     """Save ``model`` as a plain Hugging Face model in the folder ``path``: LoRA
     adapters, if any, merged into the weights (of a copy, so ``model`` keeps them),
     ``config.json`` and ``model.safetensors`` loadable with
-    ``Dinov2Model.from_pretrained(path)`` (no peft needed), and ``metadata`` (e.g. a
+    ``AutoModel.from_pretrained(path)`` (no peft needed), and ``metadata`` (e.g. a
     checkpoint's provenance) in ``pathotrain.json`` beside them. Returns ``path``."""
     path = Path(path)
     merged = hasattr(model, "merge_and_unload")

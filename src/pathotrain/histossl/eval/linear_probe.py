@@ -39,7 +39,7 @@ from torchmetrics.functional.classification import (
     multiclass_recall,
 )
 from torchvision.transforms import v2
-from transformers import Dinov2Model
+from transformers import AutoModel
 
 from pathotrain.dataloader import ClassTileDataset
 from pathotrain.histossl.backbones import build_backbone, preprocessing
@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> None:
 
         model, _ = load_backbone(args.backbone)
     elif Path(args.backbone).is_dir():
-        model = Dinov2Model.from_pretrained(args.backbone)
+        model = AutoModel.from_pretrained(args.backbone)
     else:
         model = build_backbone("pretrained", id=args.backbone, grad_checkpointing=False)
     model.to("cuda" if torch.cuda.is_available() else "cpu")

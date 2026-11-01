@@ -7,10 +7,11 @@ Writes ``config.json`` and ``model.safetensors`` (LoRA merged into the weights; 
 EMA teacher for dinov2, the student otherwise) and ``pathotrain.json``: the
 checkpoint's provenance (backbone and revision, normalisation, input size,
 adaptation, method, git commit), its epoch, step and monitored metric, and the
-experiment config. Load it anywhere with transformers alone::
+experiment config. Load it anywhere with transformers alone (a ``Dinov2Model``,
+or ``Dinov2WithRegistersModel`` from openmidnight-1.1)::
 
-    from transformers import Dinov2Model
-    encoder = Dinov2Model.from_pretrained("exported/jepa01")
+    from transformers import AutoModel
+    encoder = AutoModel.from_pretrained("exported/jepa01")
 
 Preprocess tiles as the model's config says (``encoder.config.preprocessing``, or
 :func:`pathotrain.histossl.backbones.preprocessing`): ``input_size`` px, ``mean``

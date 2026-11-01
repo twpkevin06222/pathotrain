@@ -207,7 +207,7 @@ def load_model(path: str | Path, map_location: str = "cpu") -> tuple[SSLTask, di
 
 
 def load_backbone(path: str | Path) -> tuple[nn.Module, dict]:
-    """The trained encoder of a checkpoint as a plain ``Dinov2Model`` (LoRA merged
+    """The trained encoder of a checkpoint as a plain HF model (LoRA merged
     into its weights), in eval mode, with its config."""
     task, cfg = load_model(path)
     backbone = task.encoder

@@ -204,6 +204,7 @@ SSA, 224 px; 2175 train / 977 test tiles, official split):
 |---|---|---|---|---|
 | midnight-12k | 0.806 | 0.906 | 0.723 | 0.821 |
 | spectra-midnight-12k | 0.801 | 0.903 | 0.753 | 0.853 |
+| openmidnight-1.1 | 0.821 | 0.915 | 0.763 | 0.867 |
 
 MHIST ships one CSV for both splits (`Image Name`, `Majority Vote Label`,
 `Partition`); split it into `train.csv` and `test.csv` with `path,label`

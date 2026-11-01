@@ -4,7 +4,12 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import Dinov2Config, Dinov2Model
 
-from pathotrain.pathofm import classification_embedding, load_backbone, segmentation_embedding
+from pathotrain.pathofm import (
+    classification_embedding,
+    from_timm_dinov2,
+    load_backbone,
+    segmentation_embedding,
+)
 from pathotrain.segmentation import CEDiceLoss, ViTPyramidEncoder, build_model
 
 # Same architecture family as Midnight-12k (DINOv2, patch 14, SwiGLU, no registers), tiny.
@@ -41,6 +46,31 @@ def test_last_layer_feature_is_the_card_segmentation_embedding():
             encoder.backbone, F.interpolate(x, size=(224, 224), mode="bilinear")
         )
     torch.testing.assert_close(feature, card)
+
+
+def test_timm_dinov2_with_registers_converts_exactly():
+    timm = pytest.importorskip("timm")
+    torch.manual_seed(0)
+    # OpenMidnight's architecture, tiny: 2 heads of 64, SwiGLU 344 wide (HF's for 128).
+    ref = timm.create_model(
+        "vit_giant_patch14_reg4_dinov2",
+        embed_dim=128,
+        depth=2,
+        num_heads=2,
+        mlp_ratio=688 / 128,
+        img_size=224,
+        pretrained=False,
+    ).eval()
+    for p in ref.parameters():  # LayerScale starts at 1e-5: make every weight count
+        p.data.normal_(0, 0.1)
+    model = from_timm_dinov2({k: v.clone() for k, v in ref.state_dict().items()})
+    x = torch.rand(2, 3, 224, 224)
+    with torch.no_grad():
+        want = ref.forward_features(x)
+        torch.testing.assert_close(model(pixel_values=x).last_hidden_state, want)
+        emb = classification_embedding(model, x)  # registers (tokens 1-4) left out
+        torch.testing.assert_close(emb, torch.cat([want[:, 0], want[:, 5:].mean(1)], -1))
+        assert segmentation_embedding(model, x).shape == (2, 128, 16, 16)
 
 
 @pytest.mark.parametrize(
