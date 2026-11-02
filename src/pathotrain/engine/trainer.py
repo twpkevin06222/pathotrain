@@ -15,6 +15,7 @@ import torch
 from lightning_fabric import Fabric
 from lightning_fabric.loggers import Logger
 from loguru import logger
+from torch import nn
 from torch.utils.data import DataLoader
 
 from pathotrain.engine.task import Task
@@ -201,8 +202,9 @@ class Trainer:
         """Checkpoint ``model`` (a plain state dict), the task's ``checkpoint_state``,
         ``epoch``, ``step`` and ``extra``; unless ``weights_only``, also the optimizer,
         scheduler and callback state needed to resume. Call on every rank."""
+        model = self.task.model
         state = {
-            "model": self.task.model,
+            "model": trainable_state(model) if self.task.checkpoint_trainable_only else model,
             **self.task.checkpoint_state(),
             "epoch": self.epoch,
             "step": self.step,
@@ -217,8 +219,14 @@ class Trainer:
 
     def load(self, path: str | Path) -> None:
         # Fabric restores the model and optimizer in place and returns the other entries.
-        modules = {"model": self.task.model, **self.task.checkpoint_state()}
+        partial = self.task.checkpoint_trainable_only
+        modules = {
+            **({} if partial else {"model": self.task.model}),
+            **self.task.checkpoint_state(),
+        }
         rest = self.fabric.load(path, {**modules, "optimizer": self.optimizer})
+        if partial:
+            load_trainable_state(self.task.model, rest["model"])
         if self.scheduler is not None:
             # A saved scheduler state would carry the old run length (cosine T_max), so a
             # longer resumed run would raise the lr again; replay the new schedule instead.
@@ -240,6 +248,29 @@ class Trainer:
             for i, cb in enumerate(self.callbacks)
             if hasattr(cb, "state_dict")
         }
+
+
+def trainable_state(model: nn.Module) -> dict[str, torch.Tensor]:
+    """``model``'s state dict without its frozen parameters: the trainable
+    parameters and all buffers (which may change in training, e.g. norm statistics)."""
+    return {
+        k: v.detach()
+        for k, v in model.state_dict(keep_vars=True).items()
+        if not isinstance(v, nn.Parameter) or v.requires_grad
+    }
+
+
+def load_trainable_state(model: nn.Module, state: dict[str, torch.Tensor]) -> None:
+    """Load a :func:`trainable_state` into ``model`` (rebuilt with the same frozen
+    weights), refusing a state that misses any of its trainable parameters or
+    buffers or holds keys it lacks."""
+    expected, saved = trainable_state(model).keys(), state.keys()
+    missing, unexpected = sorted(expected - saved), sorted(saved - model.state_dict().keys())
+    if missing or unexpected:
+        raise KeyError(
+            f"trainable state mismatch: missing {missing[:5]}, unexpected {unexpected[:5]}"
+        )
+    model.load_state_dict(state, strict=False)
 
 
 def _fmt(metrics: dict[str, float]) -> str:

@@ -6,7 +6,12 @@ from pathotrain.engine.logger import CSVLogger, MLflowLogger
 from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.sweep import sweep, write_trials_csv
 from pathotrain.engine.task import Task
-from pathotrain.engine.trainer import Trainer, TrainerConfig
+from pathotrain.engine.trainer import (
+    Trainer,
+    TrainerConfig,
+    load_trainable_state,
+    trainable_state,
+)
 
 __all__ = [
     "CSVLogger",
@@ -20,7 +25,9 @@ __all__ = [
     "dump_config",
     "flatten",
     "load_config",
+    "load_trainable_state",
     "sweep",
+    "trainable_state",
     "warmup_cosine",
     "write_trials_csv",
 ]

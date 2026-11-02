@@ -18,6 +18,7 @@ from pathotrain.engine import (
     dump_config,
     flatten,
     load_config,
+    load_trainable_state,
     sweep,
 )
 from pathotrain.segmentation import SegmentationTask, build_model
@@ -158,6 +159,42 @@ def test_hook_before_optimizer_step_sees_the_gradients():
     Trainer(TrainerConfig(max_epochs=2, accumulate=2, **CPU)).fit(task, _loader())
     assert task.calls == 2 * 2  # 4 batches, 2 per optimizer step
     assert all(torch.equal(a, b) for a, b in zip(before, task.model.parameters(), strict=True))
+
+
+def _frozen_encoder_task():
+    torch.manual_seed(0)  # the same frozen encoder every time, as a pinned pretrained base
+    task = _task()
+    task.model.encoder.requires_grad_(False)
+    task.checkpoint_trainable_only = True
+    return task
+
+
+def test_trainable_only_checkpoints_reload_onto_the_frozen_base(tmp_path):
+    task = _frozen_encoder_task()
+    checkpoint = ModelCheckpoint(tmp_path)
+    Trainer(TrainerConfig(max_epochs=2, **CPU), callbacks=[checkpoint]).fit(
+        task, _loader(), _loader()
+    )
+    best = torch.load(tmp_path / "best.ckpt", weights_only=True)["model"]
+    full = task.model.state_dict()
+    frozen = {n for n, p in task.model.named_parameters() if not p.requires_grad}
+    assert frozen and not frozen & best.keys() and best.keys() < full.keys()
+    assert "encoder.bn1.running_mean" in best  # buffers move in training, so they are kept
+
+    last = torch.load(tmp_path / "last.ckpt", weights_only=True)["model"]
+    rebuilt = _frozen_encoder_task().model.eval()
+    load_trainable_state(rebuilt, last)
+    x = _loader().dataset.tensors[0][:2]
+    assert torch.equal(rebuilt(x), task.model.eval()(x))
+
+    resumed = Trainer(TrainerConfig(max_epochs=3, **CPU))
+    resumed.fit(_frozen_encoder_task(), _loader(), ckpt_path=tmp_path / "last.ckpt")
+    assert resumed.epoch == 3
+
+    with pytest.raises(KeyError, match="missing"):
+        load_trainable_state(_frozen_encoder_task().model, {})
+    with pytest.raises(KeyError, match="unexpected"):
+        load_trainable_state(_frozen_encoder_task().model, {**last, "nope": torch.zeros(1)})
 
 
 def test_val_every_validates_every_n_epochs_and_the_last(monkeypatch):
