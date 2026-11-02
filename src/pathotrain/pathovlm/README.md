@@ -11,8 +11,8 @@ the other modules.
 
 > [!NOTE]
 > In development. Done: the VQA dataset and PathVQA converter, the model
-> registry and the training / generation collator. Next: a zero-shot baseline,
-> then LoRA fine-tuning with TRL, evaluation and export.
+> registry, the training / generation collator and zero-shot evaluation.
+> Next: LoRA fine-tuning with TRL, then export.
 
 ```bash
 pip install -e ".[pathovlm]"   # peft, num2words (SmolVLM's processor needs it)
@@ -74,8 +74,8 @@ between splits are reported.
 
 - One image is in both train and validation; none is shared with test
   (identical files only; a re-encoded copy of a figure would not be caught).
-- 55% of the closed answers are "yes": always answering "yes" scores 0.55
-  closed accuracy, the floor any model must beat.
+- 55% of train's and 54% of test's closed answers are "yes": always answering
+  "yes" scores 0.540 closed accuracy on test, the floor any model must beat.
 - 3,223 distinct open answers in train; the most common are organ systems
   ("oral", "cardiovascular", ...).
 
@@ -113,6 +113,57 @@ generate = VQACollator(processor, generation=True)  # prompts only, left-padded
 - The collator pickles, so it works in `DataLoader` workers.
 - The same collator is TRL's `data_collator` (with `remove_unused_columns=False`
   and dataset preparation skipped), so TRL does not re-tokenise the chats.
+
+## Evaluation
+
+```bash
+python -m pathotrain.pathovlm.eval qwen3-vl-2b pathvqa/test.jsonl --out zero_shot/qwen3-vl-2b
+```
+
+Greedy answers of the pinned base model (zero-shot; fine-tuned adapters come
+with training), written to `predictions.csv` (question, answer, type,
+prediction) and `metrics.json`. `--max-samples N` scores N evenly spaced
+questions for a quick check.
+
+Every question is followed by one answer-format instruction, the same for all
+questions and models, LLaVA's: *"Answer the question using a single word or
+phrase."* Without one, instruction-tuned models answer in sentences and exact
+match scores nearly zero. It is one instruction for every question because the
+question type comes from the gold answer: a per-type instruction would give it
+away. An instruction that also asked for yes / no on yes/no questions raised
+closed accuracy by ~5 points on validation but made Qwen3-VL answer yes / no
+to 98% of open questions; this one keeps both types sane (1% of open answers
+are yes / no, >= 99% of closed answers contain one).
+
+| Metric | Questions | Meaning |
+|---|---|---|
+| `closed_acc` | closed | the prediction's first "yes" / "no" equals the gold answer (none: wrong) |
+| `closed_parsed` | closed | share of predictions with a "yes" or "no" at all |
+| `open_em` | open | prediction equals gold after lowercasing and removing punctuation and articles |
+| `open_f1` | open | token F1 between prediction and gold (SQuAD style) |
+| `open_recall` | open | share of gold tokens in the prediction (LLaVA-Med style); rewards long answers, read it with EM and F1 |
+
+BLEU is not reported: PathVQA answers are one to three words, too short for
+its n-gram statistics.
+
+### Zero-shot baseline on PathVQA test
+
+6,719 questions (3,362 closed, 3,357 open), greedy, the instruction above.
+
+| Model | closed_acc | closed_parsed | open_em | open_f1 | open_recall |
+|---|---|---|---|---|---|
+| always "yes" | 0.540 | 1.000 | - | - | - |
+| `smolvlm2-500m` | 0.516 | 0.981 | 0.010 | 0.028 | 0.033 |
+| `qwen3-vl-2b` | 0.632 | 0.998 | 0.039 | 0.062 | 0.062 |
+| `smolvlm2-2.2b` | pending | | | | |
+| `qwen3-vl-4b` | pending | | | | |
+
+- Zero-shot, closed accuracy is near chance: SmolVLM2-500M is below the
+  always-"yes" floor (0.540 on test), Qwen3-VL-2B 9 points above it.
+- Open answers are almost never right word for word: PathVQA's open answers
+  are textbook phrases ("cortical bone forming the outer shell") a model cannot
+  guess without training on the dataset's style. Fine-tuning is expected to
+  move these most; the zero-shot open numbers mainly show the floor.
 
 ## Training (planned)
 

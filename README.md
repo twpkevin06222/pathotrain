@@ -61,7 +61,7 @@ of them is gated, so no login is needed.
 
 ### System design
 
-![pathotrain system design: slides and annotations are tiled by patchology, loaded and augmented by pathotrain.dataloader, trained by the task modules on the shared engine, and exported as checkpoints, ONNX or safetensors for inference](src/pathotrain/figures/pathotrain_systemdesign.png)
+![pathotrain system design: slides and annotations are tiled by patchology, loaded and augmented by pathotrain.dataloader, trained by the task modules on the shared engine, and exported as checkpoints, ONNX or safetensors for inference](figures/pathotrain_systemdesign.png)
 
 Slides and their annotations are tiled by patchology, loaded and augmented by
 `pathotrain.dataloader`, and trained by a task module on the shared engine.
