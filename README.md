@@ -58,6 +58,17 @@ of them is gated, so no login is needed.
 
 ## Getting started
 
+### System design
+
+![pathotrain system design: slides and annotations are tiled by patchology, loaded and augmented by pathotrain.dataloader, trained by the task modules on the shared engine, and exported as checkpoints, ONNX or safetensors for inference](src/pathotrain/figures/pathotrain_systemdesign.png)
+
+Slides and their annotations are tiled by patchology, loaded and augmented by
+`pathotrain.dataloader`, and trained by a task module on the shared engine.
+Trained models are saved as checkpoints and exported to ONNX (or safetensors
+for VLMs) for inference.
+
+### Train, evaluate, export
+
 Each trainable module ships an example config. Copy it, set the data paths
 and train:
 
