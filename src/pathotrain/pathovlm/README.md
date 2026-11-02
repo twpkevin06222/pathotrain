@@ -119,10 +119,14 @@ generate = VQACollator(processor, generation=True)  # prompts only, left-padded
 
 ```bash
 python -m pathotrain.pathovlm.eval qwen3-vl-2b pathvqa/test.jsonl --out zero_shot/qwen3-vl-2b
+python -m pathotrain.pathovlm.eval qwen3-vl-2b pathvqa/test.jsonl --out lora/qwen3-vl-2b \
+    --adapter runs/<name>/checkpoint-7371
 ```
 
-Greedy answers of the pinned base model (zero-shot; fine-tuned adapters come
-with training), written to `predictions.csv` (question, answer, type,
+Greedy answers of the pinned base model, zero-shot or with a LoRA adapter from
+[training](#training) (merged into the base; the image settings and prompt
+come from the checkpoint's `provenance.json`, and an adapter trained on another
+model is refused), written to `predictions.csv` (question, answer, type,
 prediction) and `metrics.json`. `--max-samples N` scores N evenly spaced
 questions for a quick check.
 
@@ -156,11 +160,12 @@ its n-gram statistics.
 | always "yes" | 0.540 | 1.000 | - | - | - |
 | `smolvlm2-500m` | 0.516 | 0.981 | 0.010 | 0.028 | 0.033 |
 | `qwen3-vl-2b` | 0.632 | 0.998 | 0.039 | 0.062 | 0.062 |
-| `smolvlm2-2.2b` | pending | | | | |
-| `qwen3-vl-4b` | pending | | | | |
+| `smolvlm2-2.2b` | 0.584 | 0.983 | 0.018 | 0.034 | 0.035 |
+| `qwen3-vl-4b` | 0.684 | 0.998 | 0.030 | 0.058 | 0.059 |
 
 - Zero-shot, closed accuracy is near chance: SmolVLM2-500M is below the
-  always-"yes" floor (0.540 on test), Qwen3-VL-2B 9 points above it.
+  always-"yes" floor (0.540 on test), SmolVLM2-2.2B 4 points above it, Qwen3-VL
+  9 (2B) and 14 (4B) points above it.
 - Open answers are almost never right word for word: PathVQA's open answers
   are textbook phrases ("cortical bone forming the outer shell") a model cannot
   guess without training on the dataset's style. Fine-tuning is expected to

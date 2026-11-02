@@ -1,10 +1,14 @@
 """Answers of a VLM on a VQA split, scored::
 
     python -m pathotrain.pathovlm.eval qwen3-vl-2b pathvqa/test.jsonl --out zero_shot/qwen3-vl-2b
+    python -m pathotrain.pathovlm.eval qwen3-vl-2b pathvqa/test.jsonl --out lora/qwen3-vl-2b \
+        --adapter runs/vqa01/checkpoint-7371
 
-The pinned base model, without an adapter (zero-shot). Greedy decoding with one
-answer-format instruction after every question (:data:`INSTRUCTION`), so models
-that would answer in sentences are scored on their answer, not their style.
+The pinned base model, zero-shot or with a LoRA adapter from
+:mod:`pathotrain.pathovlm.train` (its ``provenance.json`` gives the image settings
+and prompt it was trained with). Greedy decoding with one answer-format
+instruction after every question (:data:`INSTRUCTION`), so models that would
+answer in sentences are scored on their answer, not their style.
 Writes ``predictions.csv`` (question, answer, type, prediction) and
 ``metrics.json`` (:func:`pathotrain.pathovlm.metrics.score`, model, revision,
 instruction) under ``--out`` and prints the metrics.
@@ -72,17 +76,33 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--adapter", help="checkpoint-N folder of pathotrain.pathovlm.train")
     args = parser.parse_args(argv)
+    prov = {"image": {}, "prompt": {"system": None, "instruction": INSTRUCTION}}
+    if args.adapter:
+        prov = json.loads((Path(args.adapter) / "provenance.json").read_text())
+        if prov["model"] != args.model:
+            parser.error(f"--adapter was trained on {prov['model']}, not {args.model}")
 
     dataset = VQADataset(args.data)
     rows = dataset.rows
     if args.max_samples and len(dataset) > args.max_samples:
         keep = np.linspace(0, len(dataset) - 1, args.max_samples).round().astype(int)
         dataset, rows = Subset(dataset, keep), [rows[i] for i in keep]
-    model, processor = load_vlm(args.model)
+    model, processor = load_vlm(args.model, **prov["image"])
+    if args.adapter:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
     model.to("cuda" if torch.cuda.is_available() else "cpu")
     predictions = generate_answers(
-        model, processor, dataset, args.batch_size, args.num_workers, args.max_new_tokens
+        model,
+        processor,
+        dataset,
+        args.batch_size,
+        args.num_workers,
+        args.max_new_tokens,
+        **prov["prompt"],
     )
     answers, types = [r["answer"] for r in rows], [r["type"] for r in rows]
     metrics = score(predictions, answers, types)
@@ -100,8 +120,9 @@ def main(argv: list[str] | None = None) -> None:
     report = {
         "model": args.model,
         "revision": f"{vlm.repo}@{vlm.revision}",
+        "adapter": args.adapter,
         "data": args.data,
-        "instruction": INSTRUCTION,
+        **prov["prompt"],
         **metrics,
     }
     (out / "metrics.json").write_text(json.dumps(report, indent=2))

@@ -10,6 +10,7 @@ pytest.importorskip("trl")
 from transformers import AutoConfig, AutoModelForImageTextToText
 
 from pathotrain.pathovlm import VLMS, load_processor
+from pathotrain.pathovlm import eval as vlm_eval
 from pathotrain.pathovlm import train as vlm_train
 from pathotrain.pathovlm.callbacks import pathotrain_name
 from pathotrain.pathovlm.config import ConfigError, validate
@@ -99,6 +100,16 @@ def test_trl_run_logs_like_pathotrain_and_saves_adapter_checkpoints(tmp_path, mo
     assert mlrun.info.status == "FINISHED"
     assert {"val/closed_acc", "best/val/closed_acc"} <= mlrun.data.metrics.keys()
     assert mlrun.data.params["best_checkpoint"] == result["best_checkpoint"]
+
+    base, _ = _tiny_smolvlm()  # the trained model now holds LoRA layers
+    monkeypatch.setattr(vlm_eval, "load_vlm", lambda name, **image: (base, processor))
+    out = tmp_path / "eval"
+    args = [cfg["data"]["val"], "--out", str(out), "--num-workers", "0", "--max-new-tokens", "3"]
+    vlm_eval.main(["smolvlm2-500m", *args, "--adapter", str(checkpoints[-1])])
+    report = json.loads((out / "metrics.json").read_text())
+    assert report["adapter"] == str(checkpoints[-1]) and report["n_closed"] + report["n_open"] == 4
+    with pytest.raises(SystemExit):  # adapter trained on another model
+        vlm_eval.main(["qwen3-vl-2b", *args, "--adapter", str(checkpoints[-1])])
 
 
 def test_log_keys_get_pathotrain_names():
