@@ -5,6 +5,7 @@ from PIL import Image
 
 from pathotrain.pathovlm import VLMS, VQACollator, load_processor
 from pathotrain.pathovlm.collate import IGNORE
+from pathotrain.pathovlm.metrics import normalize, score, yes_no
 
 
 def _processor(name):
@@ -85,3 +86,34 @@ def test_registry_rejects_unknown_models_and_pins_revisions():
     assert all(len(v.revision) == 40 for v in VLMS.values())
     with pytest.raises(ValueError, match="unknown VLM"):
         load_processor("qwen9-vl")
+
+
+def test_instruction_follows_every_question_in_training_and_generation():
+    processor = _processor("smolvlm2-500m")
+    for generation in (False, True):
+        batch = VQACollator(processor, generation=generation, instruction="Answer briefly.")(
+            SAMPLES
+        )
+        text = processor.tokenizer.decode(batch["input_ids"][1])
+        assert "what is present?\nAnswer briefly." in text
+
+
+def test_scores_parse_yes_no_and_normalise_open_answers():
+    preds = ["Yes, the image shows a carcinoma.", "no", "maybe", "The Liver.", "necrosis of kidney"]
+    golds = ["yes", "yes", "no", "liver", "necrosis of the liver"]
+    types = ["closed", "closed", "closed", "open", "open"]
+    s = score(preds, golds, types)
+    assert s["n_closed"] == 3 and s["n_open"] == 2
+    assert s["closed_acc"] == pytest.approx(1 / 3) and s["closed_parsed"] == pytest.approx(2 / 3)
+    assert s["open_em"] == 0.5  # "The Liver." == "liver"; articles and punctuation dropped
+    # "necrosis of kidney" vs "necrosis of liver": 2 of 3 tokens each way
+    assert s["open_f1"] == pytest.approx((1 + 2 / 3) / 2)
+    assert s["open_recall"] == pytest.approx((1 + 2 / 3) / 2)
+    assert normalize("  An  Oral-cavity! ") == "oral cavity"
+    assert yes_no("Not sure; no.") == "no" and yes_no("unknown") is None
+    assert score(["yes"], ["yes"], ["closed"]).keys() == {
+        "n_closed",
+        "n_open",
+        "closed_acc",
+        "closed_parsed",
+    }

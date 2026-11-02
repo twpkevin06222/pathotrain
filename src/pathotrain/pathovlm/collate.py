@@ -31,6 +31,8 @@ class VQACollator:
     Training (``generation=False``): the processor's inputs, right-padded, plus
     ``labels``. Generation: the prompts only, left-padded so new tokens follow
     every prompt, plus the ``answers`` and ``types`` to score against.
+    ``instruction`` follows every question, e.g. the answer format (the same for
+    every question: a per-type one would give away the gold answer's type).
 
     Raises:
         ValueError: A chat template whose prompt is not a prefix of the full
@@ -39,7 +41,11 @@ class VQACollator:
     """
 
     def __init__(
-        self, processor: ProcessorMixin, system: str | None = None, generation: bool = False
+        self,
+        processor: ProcessorMixin,
+        system: str | None = None,
+        generation: bool = False,
+        instruction: str | None = None,
     ) -> None:
         if generation:
             processor = copy.deepcopy(processor)  # the caller's keeps its padding side
@@ -47,6 +53,11 @@ class VQACollator:
         elif processor.tokenizer.padding_side != "right":
             raise ValueError("training batches need a right-padding tokenizer")
         self.processor, self.system, self.generation = processor, system, generation
+        self.instruction = instruction
+
+    def _question(self, sample: dict) -> str:
+        q = sample["question"]
+        return f"{q}\n{self.instruction}" if self.instruction else q
 
     def _render(self, messages: list[dict], generation_prompt: bool) -> str:
         # A non-empty processor_kwargs stops SmolVLM's override from putting its video
@@ -61,7 +72,7 @@ class VQACollator:
 
     def __call__(self, samples: list[dict]) -> dict:
         images = [[s["image"]] for s in samples]
-        prompts = [self._render(chat(s["question"], system=self.system), True) for s in samples]
+        prompts = [self._render(chat(self._question(s), system=self.system), True) for s in samples]
         if self.generation:
             batch = self.processor(text=prompts, images=images, padding=True, return_tensors="pt")
             return {
@@ -70,7 +81,7 @@ class VQACollator:
                 "types": [s["type"] for s in samples],
             }
         texts = [
-            self._render(chat(s["question"], s["answer"], self.system), False) for s in samples
+            self._render(chat(self._question(s), s["answer"], self.system), False) for s in samples
         ]
         batch = self.processor(text=texts, images=images, padding=True, return_tensors="pt")
         labels = torch.full_like(batch["input_ids"], IGNORE)
