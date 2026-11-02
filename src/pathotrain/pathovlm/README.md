@@ -11,9 +11,9 @@ the other modules.
 
 > [!NOTE]
 > In development. Done: the VQA dataset and PathVQA converter, the model
-> registry, the training / generation collator, zero-shot evaluation and LoRA
-> fine-tuning with TRL. Next: full fine-tuning runs, evaluation of trained
-> adapters, export.
+> registry, the training / generation collator, zero-shot and adapter
+> evaluation, LoRA fine-tuning with TRL, and full runs of Qwen3-VL 2B and 4B on
+> PathVQA ([results](#lora-fine-tuning-on-pathvqa)). Next: export.
 
 ```bash
 pip install -e ".[pathovlm]"   # trl (pinned), peft, num2words (SmolVLM's processor needs it)
@@ -220,9 +220,39 @@ Measured on one RTX 5090:
 |---|---|---|---|---|
 | smolvlm2-500m, 8 PathVQA rows, train = val (smoke) | 80 | 1 min | - | memorises all 8: closed acc, open EM and F1 = 1.0 by step 20 |
 | qwen3-vl-2b, batch 8, 2% of an epoch, 2 evaluations | 50 | 72 s | 8.9 GB | runs end to end; open EM 0.08-0.09 on 128 val rows after 400 examples (zero-shot: 0.04 on test) |
+| qwen3-vl-2b example config, 3 epochs, 15 evaluations | 7,371 | 1 h 18 min | ~11 GB (one reading, not tracked) | below; adapter 67 MB |
+| qwen3-vl-4b example config (batch 4 x 2), 3 epochs, 15 evaluations | 7,371 | 2 h 11 min | 17.3 GB | below; adapter 127 MB |
 
-A full 3-epoch run of the 2B example (~7,400 steps) is estimated at 2-3 hours;
-not yet run.
+### LoRA fine-tuning on PathVQA
+
+The example configs as shipped (rank 16 on all language-model linear layers,
+lr 2e-4 cosine, 3 epochs, effective batch 8, seed 0), scored on PathVQA test
+(6,719 questions) with `eval --adapter`. "best" is the checkpoint chosen by
+`val/closed_acc` on 512 validation rows, "final" the last one.
+
+| Model | Checkpoint | closed_acc | open_em | open_f1 | open_recall |
+|---|---|---|---|---|---|
+| always "yes" | | 0.540 | - | - | - |
+| `qwen3-vl-2b` | zero-shot | 0.632 | 0.039 | 0.062 | 0.062 |
+| `qwen3-vl-2b` | best (step 4500) | 0.914 | 0.310 | 0.353 | 0.352 |
+| `qwen3-vl-2b` | final (step 7371) | 0.918 | 0.326 | 0.369 | 0.371 |
+| `qwen3-vl-4b` | zero-shot | 0.684 | 0.030 | 0.058 | 0.059 |
+| `qwen3-vl-4b` | best (step 5000) | 0.932 | 0.331 | 0.378 | 0.379 |
+| `qwen3-vl-4b` | final (step 7371) | **0.933** | **0.353** | **0.402** | **0.404** |
+
+- Fine-tuning is what matters: +28 / +25 points closed accuracy and ~8x open
+  EM over zero-shot. 4B over 2B adds ~1.5 points closed and ~3 points open EM
+  and F1, for 1.7x the training time and twice the adapter size.
+- `val/loss` is lowest around 1.8 epochs and rises in epoch 3 (2B: 0.937 to
+  1.067, 4B: 0.817 to 0.946), but the generated answers keep improving: the
+  final checkpoint beats the "best" one on test for both models. Answer-only
+  cross-entropy rises as the model grows more confident on the answers it gets
+  wrong; it is not the metric to stop on here.
+- 512 validation rows (~270 closed) give `val/closed_acc` steps of ~0.4
+  points and noise of ~2, too coarse to choose between late checkpoints.
+  Raise `eval.max_samples` or monitor `val/open_f1` for the choice to mean
+  more; untried.
+- One seed per model, no hyperparameter search.
 
 ## Design notes
 

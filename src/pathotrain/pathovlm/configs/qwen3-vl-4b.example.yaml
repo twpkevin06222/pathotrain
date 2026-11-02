@@ -32,7 +32,7 @@ eval:
 trainer:
   epochs: 3
   lr: 2.0e-4
-  batch_size: 4               # example: 4B weights are ~9 GB; not yet measured at 8
+  batch_size: 4               # example: peak 17.3 GB on an RTX 5090 (2.2 h for 3 epochs); 8 x 1 untried
   accumulate: 2
   warmup: 0.03                # share of the steps
   weight_decay: 0.0
