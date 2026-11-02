@@ -11,9 +11,15 @@ class Task(nn.Module):
     ``model`` is the network the trainer wraps for distributed training; the
     rest of the module (metrics, losses) is only moved to the device. Keep
     metrics as torchmetrics so they are synced across ranks.
+
+    With ``checkpoint_trainable_only``, checkpoints keep only ``model``'s trainable
+    parameters and its buffers (e.g. LoRA adapters on a frozen pretrained base),
+    restored with :func:`~pathotrain.engine.load_trainable_state` onto a model
+    rebuilt with the same frozen weights.
     """
 
     model: nn.Module
+    checkpoint_trainable_only: bool = False
 
     def training_step(self, batch) -> tuple[Tensor, dict[str, Tensor]]:
         """Return the loss to backpropagate and scalars to log (under ``train/``)."""
