@@ -41,6 +41,9 @@ pathogen = [
 histossl = [
     "peft>=0.21.2",
 ]
+all = [
+    "pathotrain[detection,export,histossl,pathogen]",
+]
 
 [build-system]
 requires = ["hatchling"]
