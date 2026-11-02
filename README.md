@@ -43,6 +43,7 @@ list of extras:
 | `detection` | rfdetr 1.11.2 (pinned), pycocotools, torch-hungarian | `pathotrain.detection` |
 | `histossl` | peft | LoRA adaptation in `pathotrain.histossl` |
 | `pathogen` | diffusers | `pathotrain.pathogen` |
+| `pathovlm` | peft, num2words | `pathotrain.pathovlm` |
 | `export` | onnx, onnxruntime | ONNX export of any trained model |
 | `all` | every extra above | everything |
 
@@ -102,6 +103,7 @@ config.yaml`); see each module's README for its data layout and options.
 | [`detection`](src/pathotrain/detection/README.md) | Cell / object detection | [RF-DETR](https://github.com/roboflow/rf-detr) nano to large (DINOv2 backbone, DETR decoder), COCO-pretrained | `detection/config.example.yaml` |
 | [`pathogen`](src/pathotrain/pathogen/README.md) | Virtual staining (e.g. H&E to IHC) from registered tile pairs | [diffusers](https://github.com/huggingface/diffusers): latent diffusion with a frozen SD VAE and a UNet (DDPM / DDIM), or SiT with rectified flow and REPA | `pathogen/config.example.yaml` |
 | [`histossl`](src/pathotrain/histossl/README.md) | Self-supervised (continued) pretraining of pathology foundation models | DINOv2 (DINO + iBOT + KoLeo / KDE, incl. the OpenMidnight recipe), teacher-JEPA, LeJEPA; full, last-N or LoRA ([peft](https://github.com/huggingface/peft)) adaptation; linear, kNN and dense probes | `histossl/configs/*.example.yaml` |
+| [`pathovlm`](src/pathotrain/pathovlm/README.md) | VLM fine-tuning for pathology VQA (in development) | [transformers](https://github.com/huggingface/transformers) Qwen3-VL and SmolVLM2, fine-tuned with [TRL](https://github.com/huggingface/trl)'s SFTTrainer and LoRA ([peft](https://github.com/huggingface/peft)), logged like the other modules; PathVQA data | not yet |
 
 ## Helper modules
 
@@ -109,7 +111,7 @@ These support the trainable modules and have no training of their own.
 
 | Module | What it provides |
 |---|---|
-| [`dataloader`](src/pathotrain/dataloader/README.md) | PyTorch datasets for slides and tiles: segmentation (GeoJSON masks), detection, classification (class folders or CSV), unlabelled tiles with multi-crop views, paired tiles; tile export to disk; augmentation (HED / HSV stain jitter, flips, rotations, blur, JPEG, RandAugment) |
+| [`dataloader`](src/pathotrain/dataloader/README.md) | PyTorch datasets for slides and tiles: segmentation (GeoJSON masks), detection, classification (class folders or CSV), unlabelled tiles with multi-crop views, paired tiles, VQA image-question-answer rows (with a PathVQA converter); tile export to disk; augmentation (HED / HSV stain jitter, flips, rotations, blur, JPEG, RandAugment) |
 | `engine` | The trainer all tasks share: `Task` contract, `Trainer` on Lightning Fabric (devices, DDP, mixed precision, gradient accumulation and clipping), `ModelCheckpoint` / `EarlyStopping` callbacks, MLflow and CSV loggers, warmup-cosine schedule, Optuna `sweep`, YAML config loading |
 | [`pathofm`](src/pathotrain/pathofm/README.md) | Pathology foundation models as frozen or trainable backbones, with their model-card preprocessing and tile / dense embeddings (see below) |
 | [`registration`](src/pathotrain/registration/README.md) | Rigid alignment of a non-H&E slide (IHC, special stain) to its H&E slide, with an overlay check; feeds paired tiles to `pathogen` |

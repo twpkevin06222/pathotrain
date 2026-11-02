@@ -41,8 +41,12 @@ pathogen = [
 histossl = [
     "peft>=0.21.2",
 ]
+pathovlm = [
+    "num2words>=0.5.14",  # SmolVLM's processor refuses to load without it
+    "peft>=0.21.2",
+]
 all = [
-    "pathotrain[detection,export,histossl,pathogen]",
+    "pathotrain[detection,export,histossl,pathogen,pathovlm]",
 ]
 
 [build-system]
