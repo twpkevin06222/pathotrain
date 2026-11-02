@@ -13,7 +13,8 @@ the other modules.
 > In development. Done: the VQA dataset and PathVQA converter, the model
 > registry, the training / generation collator, zero-shot and adapter
 > evaluation, LoRA fine-tuning with TRL, and full runs of Qwen3-VL 2B and 4B on
-> PathVQA ([results](#lora-fine-tuning-on-pathvqa)). Next: export.
+> PathVQA ([results](#lora-fine-tuning-on-pathvqa)), and export of the merged
+> model. Next: quantized exports.
 
 ```bash
 pip install -e ".[pathovlm]"   # trl (pinned), peft, num2words (SmolVLM's processor needs it)
@@ -254,6 +255,37 @@ lr 2e-4 cosine, 3 epochs, effective batch 8, seed 0), scored on PathVQA test
   more; untried.
 - One seed per model, no hyperparameter search.
 
+## Export
+
+```bash
+python -m pathotrain.pathovlm.export runs/<name>/checkpoint-7371 exported/<name>
+```
+
+Writes the base model with the adapter merged into its weights (bf16
+`model*.safetensors`, `config.json`), the processor with the image settings it
+was trained with, and `pathotrain.json` (the checkpoint's provenance: base model
+and revision, image settings, LoRA settings, prompt, git commit). Loading it
+needs transformers alone, no peft or pathotrain:
+
+```python
+from transformers import AutoModelForImageTextToText, AutoProcessor
+
+model = AutoModelForImageTextToText.from_pretrained("exported/<name>")
+processor = AutoProcessor.from_pretrained("exported/<name>")
+```
+
+Ask as in training: the question followed by the instruction in
+`pathotrain.json` (`provenance.prompt.instruction`), greedy decoding. The
+`checkpoint-N/` folder itself is the adapter alone (`adapter_config.json`,
+`adapter_model.safetensors`), for serving several adapters over one base.
+
+Checked on the `qwen3-vl-4b` final checkpoint: an 8.3 GB folder whose weights
+equal the in-memory merge tensor for tensor, and whose answers on 512 test
+questions equal `eval --adapter`'s run with the same batches. Answers can differ
+for ~2% of questions when they are batched differently: in bf16, the padding in
+a batch changes the numbers slightly. Quantized exports (FP8, AWQ, GGUF), each
+re-scored on PathVQA test, are not built yet.
+
 ## Design notes
 
 - **TRL, not pathotrain's engine.** Supervised fine-tuning alone would fit
@@ -275,4 +307,5 @@ The collator tests use the real chat templates; they need the processors in
 the Hugging Face cache (a few MB each, no weights) and skip otherwise. The
 training test runs TRL end to end on CPU with SmolVLM2-500M's architecture
 shrunk to ~3M parameters (random weights, real processor): checkpoints,
-provenance, LoRA targets, CSV and MLflow logs.
+provenance, LoRA targets, CSV and MLflow logs, `eval --adapter`, and an export
+that reloads with transformers alone and answers as the adapter does.

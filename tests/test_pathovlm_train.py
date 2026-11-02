@@ -7,10 +7,12 @@ import torch
 from PIL import Image
 
 pytest.importorskip("trl")
-from transformers import AutoConfig, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
 
+from pathotrain.dataloader.vqa import VQADataset
 from pathotrain.pathovlm import VLMS, load_processor
 from pathotrain.pathovlm import eval as vlm_eval
+from pathotrain.pathovlm import export as vlm_export
 from pathotrain.pathovlm import train as vlm_train
 from pathotrain.pathovlm.callbacks import pathotrain_name
 from pathotrain.pathovlm.config import ConfigError, validate
@@ -102,7 +104,7 @@ def test_trl_run_logs_like_pathotrain_and_saves_adapter_checkpoints(tmp_path, mo
     assert mlrun.data.params["best_checkpoint"] == result["best_checkpoint"]
 
     base, _ = _tiny_smolvlm()  # the trained model now holds LoRA layers
-    monkeypatch.setattr(vlm_eval, "load_vlm", lambda name, **image: (base, processor))
+    monkeypatch.setattr(vlm_export, "load_vlm", lambda name, **image: (base, processor))
     out = tmp_path / "eval"
     args = [cfg["data"]["val"], "--out", str(out), "--num-workers", "0", "--max-new-tokens", "3"]
     vlm_eval.main(["smolvlm2-500m", *args, "--adapter", str(checkpoints[-1])])
@@ -110,6 +112,19 @@ def test_trl_run_logs_like_pathotrain_and_saves_adapter_checkpoints(tmp_path, mo
     assert report["adapter"] == str(checkpoints[-1]) and report["n_closed"] + report["n_open"] == 4
     with pytest.raises(SystemExit):  # adapter trained on another model
         vlm_eval.main(["qwen3-vl-2b", *args, "--adapter", str(checkpoints[-1])])
+
+    # The merged export answers as the adapter does, from its folder alone.
+    exported = vlm_export.export(checkpoints[-1], tmp_path / "exported")
+    merged = AutoModelForImageTextToText.from_pretrained(exported)
+    reloaded = AutoProcessor.from_pretrained(exported)
+    assert reloaded.image_processor.size == processor.image_processor.size
+    assert reloaded.image_processor.do_image_splitting is False
+    rows = VQADataset(cfg["data"]["val"])
+    answers = vlm_eval.generate_answers(merged, reloaded, rows, 4, 0, 3)
+    with open(out / "predictions.csv", newline="") as f:
+        assert answers == [r["prediction"] for r in csv.DictReader(f)]
+    record = json.loads((exported / "pathotrain.json").read_text())
+    assert record["provenance"]["model"] == "smolvlm2-500m"
 
 
 def test_log_keys_get_pathotrain_names():
