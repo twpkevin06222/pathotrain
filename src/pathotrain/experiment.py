@@ -3,6 +3,7 @@
 ``eval`` and ``export`` modules)."""
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -65,6 +66,23 @@ def normalisation(cfg: dict, key: str) -> tuple[float, float, float]:
 
 
 _log_sink: int | None = None
+
+
+def git_commit() -> str:
+    """HEAD of the pathotrain checkout, with ``-dirty`` for uncommitted changes, or
+    ``"unknown"`` (with a warning) outside a git checkout: checkpoint provenance."""
+    git = ["git", "-C", str(Path(__file__).resolve().parent)]
+    try:
+        commit = subprocess.run(
+            [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        )
+        dirty = subprocess.run(
+            [*git, "status", "--porcelain"], capture_output=True, text=True, check=True
+        )
+    except (OSError, subprocess.CalledProcessError):
+        logger.warning("no git commit found for the checkpoint provenance")
+        return "unknown"
+    return commit.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "")
 
 
 def start(cfg: dict, resume: str | Path | None = None) -> Path:

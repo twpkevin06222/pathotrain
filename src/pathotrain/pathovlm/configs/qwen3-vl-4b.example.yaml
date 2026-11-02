@@ -1,0 +1,45 @@
+# Experiment config for `python -m pathotrain.pathovlm.train config.yaml`.
+# LoRA fine-tuning of Qwen3-VL-4B-Instruct on PathVQA with TRL's SFTTrainer.
+# Copy it and set the paths under `data`. Values shown are the defaults unless
+# marked "example".
+
+name: pathovlm_qwen4b_01      # MLflow experiment name
+seed: 0
+output_dir: runs/pathovlm_qwen4b_01
+# mlflow_db: ~/project/mlflow.db
+
+model:
+  name: qwen3-vl-4b           # or qwen3-vl-2b, smolvlm2-2.2b, smolvlm2-500m
+  image: {}                   # image-processor settings over the registry's, e.g. {do_image_splitting: true} for SmolVLM
+adaptation:                   # LoRA on the language model's linear layers; vision tower frozen
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+prompt:
+  system: null
+  instruction: Answer the question using a single word or phrase.   # after every question, as in eval
+
+data:
+  train: pathvqa/train.jsonl        # example: python -m pathotrain.dataloader.vqa pathvqa
+  val: pathvqa/validation.jsonl     # example
+  val_max_samples: 1024             # evenly spaced rows for val/loss
+eval:
+  max_samples: 512            # evenly spaced val rows answered by generation each evaluation (0: off)
+  max_new_tokens: 32
+  batch_size: 16
+
+trainer:
+  epochs: 3
+  lr: 2.0e-4
+  batch_size: 4               # example: 4B weights are ~9 GB; not yet measured at 8
+  accumulate: 2
+  warmup: 0.03                # share of the steps
+  weight_decay: 0.0
+  eval_steps: 500             # evaluate and save checkpoint-N every n optimizer steps
+  logging_steps: 10
+  save_total_limit: 2         # plus the best, which is always kept
+  num_workers: 4
+  grad_checkpointing: true
+checkpoint:
+  monitor: val/closed_acc     # or val/loss, val/open_em, val/open_f1

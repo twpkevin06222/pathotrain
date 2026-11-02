@@ -30,7 +30,6 @@ adaptation, method, git commit). Sections (``?`` marks optional ones)::
 """
 
 import argparse
-import subprocess
 from importlib.metadata import version
 from pathlib import Path
 
@@ -147,19 +146,6 @@ def provenance(ssl: SSLConfig, task: SSLTask) -> dict:
     LoRA targets ``task`` really adapted, the default resolved)."""
     bb, ad = ssl.backbone, ssl.adaptation
     mean, std = normalisation(bb.init, bb.id)
-    package = Path(__file__).resolve().parent
-    try:
-        git = ["git", "-C", str(package)]
-        commit = subprocess.run(
-            [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        )
-        dirty = subprocess.run(
-            [*git, "status", "--porcelain"], capture_output=True, text=True, check=True
-        )
-        git_commit = commit.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "")
-    except (OSError, subprocess.CalledProcessError):
-        logger.warning("no git commit found for the checkpoint provenance")
-        git_commit = "unknown"
     return {
         "backbone": (
             f"{bb.id}@{FOUNDATION_MODELS[bb.id].revision}" if bb.init == "pretrained" else bb.arch
@@ -174,7 +160,7 @@ def provenance(ssl: SSLConfig, task: SSLTask) -> dict:
             **({"rank": ad.rank, "targets": _lora_targets(task)} if ad.type == "lora" else {}),
         },
         "method": ssl.method.name,
-        "git_commit": git_commit,
+        "git_commit": experiment.git_commit(),
         "pathotrain_version": version("pathotrain"),
     }
 

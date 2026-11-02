@@ -11,11 +11,12 @@ the other modules.
 
 > [!NOTE]
 > In development. Done: the VQA dataset and PathVQA converter, the model
-> registry, the training / generation collator and zero-shot evaluation.
-> Next: LoRA fine-tuning with TRL, then export.
+> registry, the training / generation collator, zero-shot evaluation and LoRA
+> fine-tuning with TRL. Next: full fine-tuning runs, evaluation of trained
+> adapters, export.
 
 ```bash
-pip install -e ".[pathovlm]"   # peft, num2words (SmolVLM's processor needs it)
+pip install -e ".[pathovlm]"   # trl (pinned), peft, num2words (SmolVLM's processor needs it)
 ```
 
 ## Models
@@ -165,30 +166,58 @@ its n-gram statistics.
   guess without training on the dataset's style. Fine-tuning is expected to
   move these most; the zero-shot open numbers mainly show the floor.
 
-## Training (planned)
+## Training
 
 ```bash
-python -m pathotrain.pathovlm.train configs/qwen3-vl-2b.example.yaml
+cp src/pathotrain/pathovlm/configs/qwen3-vl-2b.example.yaml my_run.yaml   # set data paths
+python -m pathotrain.pathovlm.train my_run.yaml
+python -m pathotrain.pathovlm.train my_run.yaml --resume runs/<name>/checkpoint-1000
 ```
 
-- **TRL `SFTTrainer`** (`trl==1.17.1`, pinned): the answer-only loss above, peft
-  LoRA on the language model's linear layers, vision tower frozen, projector
-  optionally trained. The same trainer family brings DPO and GRPO (e.g. with
-  closed-answer rewards) later.
-- **pathotrain conventions at the edges:** one YAML per run, validated and
-  translated to `SFTConfig`; `experiment.start` copies the config, starts
-  `train.log`, seeds and refuses a changed config for an existing run.
+LoRA fine-tuning with TRL's `SFTTrainer` (`trl==1.17.1`, pinned): the
+answer-only loss of the collator above, adapters on the language model's linear
+layers (`q/k/v/o_proj`, `gate/up/down_proj`, chosen by full module name, so the
+vision tower stays frozen even where it has layers of the same names), bf16 on
+GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.yaml`,
+`configs/qwen3-vl-4b.example.yaml`.
+
+- **Like every pathotrain run:** the YAML is checked first (unknown keys and
+  missing files are errors, all listed at once) and translated to `SFTConfig`;
+  the config is copied to `<output_dir>/config.yaml` with a `train.log` beside
+  it, and a changed config for an existing run is refused unless resuming.
 - **Logging:** a callback forwards TRL's logs to pathotrain's MLflow and CSV
-  loggers under the usual names (`train/loss`, `train/lr`, `val/loss`, ...), into
-  the same `mlflow_db`, rather than TRL's own `report_to="mlflow"`.
-- **Answer metrics:** the trainer's evaluation computes only the loss, so a
-  second callback generates answers for up to `eval.max_samples` validation
-  rows and logs `val/closed_acc`, `val/open_em` and `val/open_f1`. The best
-  checkpoint follows `val/closed_acc` by default.
-- **Checkpoints:** TRL's `checkpoint-N/` folders hold the LoRA adapter as
-  `adapter_model.safetensors` (tens of MB, served directly by vLLM), plus a
-  `provenance.json`: model and revision, LoRA settings, prompt, image settings,
-  git commit, versions.
+  loggers under the usual names: `train/loss`, `train/lr`, `val/loss`,
+  `val/closed_acc`, ..., end-of-run summary under `run/`, and the best
+  checkpoint as `best/<monitor>` plus the `best_checkpoint` parameter. TRL's own
+  `report_to` is off.
+- **Evaluation** every `trainer.eval_steps` optimizer steps: `val/loss` on
+  `data.val_max_samples` evenly spaced validation rows, and answers generated
+  for `eval.max_samples` rows with the same instruction as training, scored as
+  in [Evaluation](#evaluation). `checkpoint.monitor` (default `val/closed_acc`)
+  picks the best checkpoint, which is loaded at the end.
+- **Checkpoints:** `<output_dir>/checkpoint-N/` every `eval_steps`, the
+  `save_total_limit` latest plus the best: the LoRA adapter
+  (`adapter_model.safetensors`, 67 MB for Qwen3-VL-2B at rank 16), optimizer and
+  scheduler state for `--resume`, and `provenance.json` (base model and
+  revision, image settings, LoRA settings, prompt, git commit, pathotrain and
+  TRL versions).
+
+```
+runs/<name>/
+  config.yaml  train.log
+  checkpoint-500/  adapter_model.safetensors  adapter_config.json  provenance.json  optimizer.pt ...
+  logs/version_0/metrics.csv
+```
+
+Measured on one RTX 5090:
+
+| Run | Steps | Time | Peak GPU | Result |
+|---|---|---|---|---|
+| smolvlm2-500m, 8 PathVQA rows, train = val (smoke) | 80 | 1 min | - | memorises all 8: closed acc, open EM and F1 = 1.0 by step 20 |
+| qwen3-vl-2b, batch 8, 2% of an epoch, 2 evaluations | 50 | 72 s | 8.9 GB | runs end to end; open EM 0.08-0.09 on 128 val rows after 400 examples (zero-shot: 0.04 on test) |
+
+A full 3-epoch run of the 2B example (~7,400 steps) is estimated at 2-3 hours;
+not yet run.
 
 ## Design notes
 
@@ -204,8 +233,11 @@ python -m pathotrain.pathovlm.train configs/qwen3-vl-2b.example.yaml
 ## Tests
 
 ```bash
-uv run pytest packages/pathotrain/tests/test_pathovlm.py packages/pathotrain/tests/test_vqa_dataloader.py
+uv run pytest packages/pathotrain/tests/test_pathovlm.py packages/pathotrain/tests/test_pathovlm_train.py packages/pathotrain/tests/test_vqa_dataloader.py
 ```
 
 The collator tests use the real chat templates; they need the processors in
-the Hugging Face cache (a few MB each, no weights) and skip otherwise.
+the Hugging Face cache (a few MB each, no weights) and skip otherwise. The
+training test runs TRL end to end on CPU with SmolVLM2-500M's architecture
+shrunk to ~3M parameters (random weights, real processor): checkpoints,
+provenance, LoRA targets, CSV and MLflow logs.
