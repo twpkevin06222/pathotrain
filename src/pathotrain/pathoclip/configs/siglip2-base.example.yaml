@@ -1,0 +1,51 @@
+# Experiment config for `python -m pathotrain.pathoclip.train config.yaml`.
+# LoRA fine-tuning of SigLIP 2 base (224 px) on ARCH captions, scored zero-shot on
+# CRC-VAL-HE-7K. Copy it and set the paths. Values shown are the defaults unless
+# marked "example".
+
+name: pathoclip_siglip2_base_01   # example
+seed: 0
+output_dir: runs/pathoclip_siglip2_base_01   # example
+mlflow_db: ~/project/mlflow.db                 # example
+
+model:
+  name: siglip2-base-224      # or siglip2-so400m-224
+adaptation:                   # LoRA on both towers' transformer blocks; logit scale and bias train too
+  type: lora                  # or full
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_proj, k_proj, v_proj, out_proj]   # or any of these and fc1, fc2
+
+data:                         # pathotrain.dataloader.caption JSONL; `python -m pathotrain.dataloader.caption arch ...`
+  train: ~/data/arch/train.jsonl   # example
+  val: ~/data/arch/val.jsonl       # example
+eval:                         # zero-shot classification every validation (and a linear probe with `train`)
+  test: ~/data/crc_he_100k/CRC-VAL-HE-7K   # example; class folders or a path,label CSV
+  train: null                 # e.g. a path,label CSV of a few thousand NCT-CRC-HE-100K tiles
+  template: an H&E image of {}.
+  prompts:                    # example: class folder -> its prompt, over the template
+    ADI: an H&E image of adipose tissue.
+    BACK: an H&E image of background.
+    DEB: an H&E image of debris.
+    LYM: an H&E image of lymphocytes.
+    MUC: an H&E image of mucus.
+    MUS: an H&E image of smooth muscle.
+    NORM: an H&E image of normal colon mucosa.
+    STR: an H&E image of cancer-associated stroma.
+    TUM: an H&E image of colorectal adenocarcinoma epithelium.
+  batch_size: 64
+  num_workers: 4
+
+task:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  warmup_epochs: 0.5
+trainer:
+  max_epochs: 10              # example
+  precision: bf16-mixed
+loader:
+  batch_size: 64              # in-batch negatives: the larger the better (no gain from accumulate)
+  num_workers: 8              # example
+checkpoint:
+  monitor: zs/balanced_acc    # or val/recall_mean (needs no eval section)

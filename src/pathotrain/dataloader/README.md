@@ -281,6 +281,25 @@ image, label = train[0]  # (3, H, W) in [0, 1], index into class_names
 Pass the train split's `class_names` to the others, so the indices agree even
 when a split lacks a class; a label outside them is an error.
 
+## Image-caption pairs
+
+For contrastive image-text training (`pathotrain.pathoclip`): one JSONL per
+split, `{"image": ..., "caption": ..., "group": ...}`, image paths relative to
+the JSONL's folder (or `root`). `group` (optional, default the caption) names
+the pairs that share a caption, e.g. the panels of one figure.
+
+```python
+from pathotrain.dataloader.caption import CaptionDataset
+
+train = CaptionDataset("arch/train.jsonl")
+sample = train[0]  # {"image": PIL RGB, "caption": str, "group": int, ...}
+```
+
+ARCH (CC BY-NC-SA 4.0, research use only) converts from its unzipped
+`books_set/` and `pubmed_set/` with `python -m pathotrain.dataloader.caption arch
+~/data/arch ~/data/arch`: `train.jsonl`, `val.jsonl`, `test.jsonl` (80/10/10,
+split by group so a figure's panels stay together; ARCH has no official split).
+
 ## Tests
 
 ```bash
