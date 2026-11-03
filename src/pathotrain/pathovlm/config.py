@@ -82,6 +82,7 @@ class Stage:
     preset: str | None = None
     args: dict = field(default_factory=dict)  # into the stage's TRL config class
     parent: str | None = None  # checkpoint-N folder to start from (merged), e.g. SFT's
+    teacher: str | None = None  # distill: the checkpoint-N whose answers the student learns
 
 
 @dataclass(frozen=True)
@@ -156,32 +157,40 @@ def validate(cfg: dict) -> VLMConfig:
         fixed = sorted(set(stage.args) & set(spec.fixed))
         if fixed:
             errors.append(f"stage.args cannot set {fixed}: {stage.name} needs them as they are")
+        if spec.teacher != (stage.teacher is not None):
+            need = "needs" if spec.teacher else "takes no"
+            errors.append(f"stage.teacher: {stage.name} {need} teacher checkpoint")
     if stage is not None and stage.parent is not None:
-        errors += _parent_errors(stage.parent, model, prompt)
+        errors += _checkpoint_errors("parent", stage.parent, model, prompt)
+    if stage is not None and stage.teacher is not None:
+        errors += _checkpoint_errors("teacher", stage.teacher, model, prompt, same_model=False)
     if errors:
         raise ConfigError("invalid pathovlm config:\n- " + "\n- ".join(errors))
     return VLMConfig(model, adaptation, prompt, data, evaluation, trainer, checkpoint, stage)
 
 
-def _parent_errors(parent: str, model: Model | None, prompt: Prompt | None) -> list[str]:
-    """A parent must be a checkpoint of the same model, image settings and prompt:
-    the run continues its training."""
-    path = Path(parent).expanduser() / "provenance.json"
+def _checkpoint_errors(
+    key: str, checkpoint: str, model: Model | None, prompt: Prompt | None, same_model=True
+) -> list[str]:
+    """A parent (``same_model``) or teacher checkpoint must have the run's image
+    settings and prompt: the run continues its training, or the teacher sees the
+    student's inputs."""
+    path = Path(checkpoint).expanduser() / "provenance.json"
     if not path.is_file():
-        return [f"stage.parent is not a pathovlm checkpoint (no provenance.json): {parent}"]
+        return [f"stage.{key} is not a pathovlm checkpoint (no provenance.json): {checkpoint}"]
     prov = json.loads(path.read_text())
     if model is None or model.name not in VLMS:
         return []
-    if prov["model"] != model.name:
-        return [f"stage.parent was trained on {prov['model']}, not {model.name}"]
+    if same_model and prov["model"] != model.name:
+        return [f"stage.{key} was trained on {prov['model']}, not {model.name}"]
     errors = []
     if VLMS[model.name].processor | model.image != prov["image"]:
-        errors.append(f"model.image must give the parent's image settings {prov['image']}")
+        errors.append(f"model.image must give the {key}'s image settings {prov['image']}")
     if (
         prompt is not None
         and {"system": prompt.system, "instruction": prompt.instruction} != prov["prompt"]
     ):
-        errors.append(f"prompt must be the parent's {prov['prompt']}")
+        errors.append(f"prompt must be the {key}'s {prov['prompt']}")
     return errors
 
 

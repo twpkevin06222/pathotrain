@@ -19,7 +19,12 @@ from pathotrain.pathovlm import train as vlm_train
 from pathotrain.pathovlm.callbacks import pathotrain_name
 from pathotrain.pathovlm.collate import chat
 from pathotrain.pathovlm.config import ConfigError, validate
-from pathotrain.pathovlm.stages import answer_reward, preference_pairs, unpaired_preferences
+from pathotrain.pathovlm.stages import (
+    QwenDistillationTrainer,
+    answer_reward,
+    preference_pairs,
+    unpaired_preferences,
+)
 
 
 def _tiny_smolvlm():
@@ -261,8 +266,9 @@ def test_preference_and_rl_stages_train_from_an_sft_parent(tmp_path, monkeypatch
     # dpo / kto on the sampled rows; grpo / rloo on plain VQA rows, 2 answers per question.
     expected = {"dpo": "val/rewards/chosen", "kto": "val/rewards/chosen"}
     expected |= {"grpo": "train/rewards/answer_reward/mean", "rloo": "train/reward"}
+    expected |= {"distill": "train/loss"}  # the tiny SFT model teaches itself
     for stage, logged in expected.items():
-        rl = stage in ("grpo", "rloo")
+        rl = stage in ("grpo", "rloo", "distill")  # prompts only, no val/loss
         run = {
             **cfg,
             "name": f"vqa_{stage}",
@@ -273,12 +279,14 @@ def test_preference_and_rl_stages_train_from_an_sft_parent(tmp_path, monkeypatch
             "stage": {
                 "name": stage,
                 "parent": sft,
-                "args": {"num_generations": 2} if rl else {},
+                "args": {"num_generations": 2} if stage in ("grpo", "rloo") else {},
+                "teacher": sft if stage == "distill" else None,
             },
         }
         best = vlm_train.train(run)["best_checkpoint"]
         prov = json.loads((Path(best) / "provenance.json").read_text())
         assert prov["stage"]["name"] == stage and prov["parent"] == str(Path(sft).resolve())
+        assert prov["teacher"] == (str(Path(sft).resolve()) if stage == "distill" else None)
         with open(tmp_path / stage / "logs/version_0/metrics.csv", newline="") as f:
             columns = set(csv.DictReader(f).fieldnames)
         assert {"train/loss", logged, "val/closed_acc"} <= columns
@@ -304,3 +312,34 @@ def test_rl_stages_have_no_val_loss_to_monitor(tmp_path):
     cfg = {**_cfg(tmp_path), "stage": {"name": "grpo"}, "checkpoint": {"monitor": "val/loss"}}
     with pytest.raises(ConfigError, match="grpo has no val/loss"):
         validate(cfg)
+
+
+def test_distill_needs_a_teacher_with_the_students_inputs(tmp_path):
+    cfg = _cfg(tmp_path)
+    with pytest.raises(ConfigError, match="distill needs teacher"):
+        validate({**cfg, "stage": {"name": "distill"}})
+    with pytest.raises(ConfigError, match="sft takes no teacher"):
+        validate({**cfg, "stage": {"teacher": str(tmp_path)}})
+    # Another model is fine for a teacher, other image settings are not.
+    image = {**VLMS["smolvlm2-500m"].processor, "do_image_splitting": True}
+    prov = {"model": "smolvlm2-2.2b", "image": image, "prompt": validate(cfg).prompt.__dict__}
+    (tmp_path / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(ConfigError) as e:
+        validate({**cfg, "stage": {"name": "distill", "teacher": str(tmp_path)}})
+    assert "teacher's image settings" in str(e.value) and "trained on" not in str(e.value)
+
+
+def test_qwen_distillation_rebuilds_mm_token_type_ids_from_the_tokens(monkeypatch):
+    from trl import DistillationTrainer
+
+    image = 7  # the image placeholder id; the processor's ids are misaligned (left padding)
+    out = {"prompt_ids": torch.tensor([[0, 0, 7, 7, 5], [7, 7, 7, 5, 5]])}
+    out |= {"completion_ids": torch.tensor([[3, 2], [3, 0]])}
+    out["mm_token_type_ids"] = torch.tensor([[1, 1, 0, 0, 0], [1, 1, 1, 0, 0]])
+    monkeypatch.setattr(
+        DistillationTrainer, "_generate_and_score_completions", lambda s, i: {**out}
+    )
+    trainer = object.__new__(QwenDistillationTrainer)
+    trainer._image_pad_token_id = image
+    got = trainer._generate_and_score_completions(None)["mm_token_type_ids"]
+    assert got.tolist() == [[0, 0, 1, 1, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]]
