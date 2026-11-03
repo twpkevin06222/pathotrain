@@ -223,3 +223,26 @@ def test_arch_export_keeps_a_figures_panels_in_one_split(tmp_path):
     }
     assert not (groups["train"] & groups["val"]) and not (groups["train"] & groups["test"])
     assert splits["train"][0]["image"].size == (8, 8)  # paths resolve from the output folder
+
+
+@pytest.mark.parametrize("kind", ["lora", "full"])
+def test_text_only_adaptation_keeps_the_image_tower(tmp_path, kind, monkeypatch):
+    model, processor = _tiny_siglip()
+    monkeypatch.setattr(clip_train, "load_clip", lambda name: (model, processor))
+    cfg = _cfg(tmp_path)
+    cfg = {**cfg, "adaptation": {**cfg["adaptation"], "type": kind, "towers": ["text"]}}
+    cfg = {**cfg, "trainer": {**cfg["trainer"], "max_epochs": 1}}
+    cfg.pop("eval")
+    before = {k: v.clone() for k, v in model.vision_model.state_dict().items()}
+
+    clip_train.train(cfg)
+
+    ckpt = torch.load(tmp_path / "run/checkpoints/last.ckpt", weights_only=True)
+    trained = [k for k, v in ckpt["model"].items() if "lora_" in k] if kind == "lora" else []
+    assert all("text_model" in k for k in trained)
+    after = model.vision_model.state_dict()
+    assert all(torch.equal(before[k], after[k]) for k in before)
+    assert not any(p.requires_grad for p in model.vision_model.parameters())
+    assert ckpt["provenance"]["adaptation"]["towers"] == ["text"]
+    with pytest.raises(ConfigError, match="adaptation.towers"):
+        validate({**cfg, "adaptation": {"towers": ["audio"]}})
