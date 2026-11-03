@@ -45,8 +45,12 @@ def generate_answers(
     max_new_tokens: int = 32,
     system: str | None = None,
     instruction: str | None = INSTRUCTION,
+    sampling: dict | None = None,
 ) -> list[str]:
-    """Greedy answers of ``model`` to every question of ``dataset``, in order."""
+    """Greedy answers of ``model`` to every question of ``dataset``, in order; or,
+    with ``sampling`` (``model.generate`` kwargs, e.g. ``{"do_sample": True,
+    "temperature": 1.0, "num_return_sequences": 4}``), each question's
+    ``num_return_sequences`` answers one after another."""
     device = next(model.parameters()).device
     collate = VQACollator(processor, system, generation=True, instruction=instruction)
     loader = DataLoader(
@@ -59,7 +63,9 @@ def generate_answers(
     predictions = []
     for batch in loader:
         inputs = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-        ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        ids = model.generate(
+            **inputs, max_new_tokens=max_new_tokens, **({"do_sample": False} | (sampling or {}))
+        )
         new = ids[:, inputs["input_ids"].shape[1] :]  # left padding: prompts end together
         predictions += [
             p.strip() for p in collate.processor.batch_decode(new, skip_special_tokens=True)

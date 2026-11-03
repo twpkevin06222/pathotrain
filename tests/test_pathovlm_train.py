@@ -1,5 +1,6 @@
 import csv
 import json
+from pathlib import Path
 
 import mlflow
 import pytest
@@ -10,12 +11,15 @@ pytest.importorskip("trl")
 from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
 
 from pathotrain.dataloader.vqa import VQADataset
-from pathotrain.pathovlm import VLMS, load_processor
+from pathotrain.pathovlm import VLMS, VQACollator, load_processor
 from pathotrain.pathovlm import eval as vlm_eval
 from pathotrain.pathovlm import export as vlm_export
+from pathotrain.pathovlm import sample as vlm_sample
 from pathotrain.pathovlm import train as vlm_train
 from pathotrain.pathovlm.callbacks import pathotrain_name
+from pathotrain.pathovlm.collate import chat
 from pathotrain.pathovlm.config import ConfigError, validate
+from pathotrain.pathovlm.stages import preference_pairs, unpaired_preferences
 
 
 def _tiny_smolvlm():
@@ -200,3 +204,75 @@ def test_stage_args_reach_the_trl_config_and_conflicts_are_errors(tmp_path):
         validate(bad)
     for part in ["stage.preset", "lrr", "remove_unused_columns"]:
         assert part in str(e.value)
+
+    with pytest.raises(ConfigError, match="no provenance.json"):
+        validate({**cfg, "stage": {"name": "dpo", "parent": str(tmp_path)}})
+    prov = {"model": "qwen3-vl-2b", "image": {}, "prompt": {}}
+    (tmp_path / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(ConfigError, match="trained on qwen3-vl-2b"):
+        validate({**cfg, "stage": {"name": "dpo", "parent": str(tmp_path)}})
+    with pytest.raises(ValueError, match="no samples"):  # plain VQA rows, before the run folder
+        vlm_train.train({**cfg, "stage": {"name": "dpo"}})
+    assert not (tmp_path / "run").exists()
+
+
+def test_dpo_and_kto_train_from_an_sft_parent_on_sampled_answers(tmp_path, monkeypatch):
+    monkeypatch.setattr(vlm_train, "load_vlm", lambda name, **image: _tiny_smolvlm())
+    monkeypatch.setattr(vlm_export, "load_vlm", lambda name, **image: _tiny_smolvlm())
+    cfg = {**_cfg(tmp_path), "eval": {"max_samples": 0}, "checkpoint": {"monitor": "val/loss"}}
+    sft = vlm_train.train(cfg)["best_checkpoint"]
+
+    data = {}
+    for split in ("train", "val"):
+        out = tmp_path / "samples" / f"{split}.jsonl"
+        args = [sft, cfg["data"][split], str(out), "--n", "2", "--num-workers", "0"]
+        vlm_sample.main([*args, "--max-new-tokens", "3"])
+        rows = VQADataset(out).rows  # images resolve from the new folder
+        assert all(len(r["samples"]) == 2 for r in rows)
+        # One right and one wrong answer per question, instead of the tiny model's noise.
+        lines = [json.loads(line) for line in out.read_text().splitlines()]
+        out.write_text(
+            "".join(json.dumps({**r, "samples": [r["answer"], "kidney"]}) + "\n" for r in lines)
+        )
+        data[split] = str(out)
+    assert json.loads((tmp_path / "samples/train.jsonl.provenance.json").read_text())["n"] == 2
+
+    c = validate({**cfg, "data": data, "stage": {"name": "dpo", "parent": sft}})
+    rows = [{**r, "image": str(r["image"])} for r in VQADataset(data["train"]).rows]
+    pairs, unpaired = preference_pairs(rows, c.prompt), unpaired_preferences(rows, c.prompt)
+    assert len(pairs) == 8 and {p["rejected"][0]["content"] for p in pairs} == {"kidney"}
+    assert len(unpaired) == 16 and sum(r["label"] for r in unpaired) == 8
+    # TRL renders the prompt as generation (and SFT) does.
+    from trl.data_utils import apply_chat_template, prepare_multimodal_messages
+
+    _, processor = _tiny_smolvlm()
+    image = Image.open(tmp_path / "img.png")
+    example = {
+        "prompt": prepare_multimodal_messages(pairs[0]["prompt"], images=[image]),
+        "chosen": prepare_multimodal_messages(pairs[0]["chosen"]),
+        "rejected": prepare_multimodal_messages(pairs[0]["rejected"]),
+    }
+    question = f"{rows[0]['question']}\n{c.prompt.instruction}"
+    collate = VQACollator(processor, instruction=None)
+    assert apply_chat_template(example, processor)["prompt"] == collate._render(
+        chat(question), True
+    )
+
+    for stage in ("dpo", "kto"):
+        run = {
+            **cfg,
+            "name": f"vqa_{stage}",
+            "output_dir": str(tmp_path / stage),
+            "data": data,
+            "eval": {"max_samples": 4, "max_new_tokens": 3, "batch_size": 4},
+            "checkpoint": {"monitor": "val/closed_acc"},
+            "stage": {"name": stage, "parent": sft},
+        }
+        best = vlm_train.train(run)["best_checkpoint"]
+        prov = json.loads((Path(best) / "provenance.json").read_text())
+        assert prov["stage"]["name"] == stage and prov["parent"] == str(Path(sft).resolve())
+        with open(tmp_path / stage / "logs/version_0/metrics.csv", newline="") as f:
+            columns = set(csv.DictReader(f).fieldnames)
+        assert {"train/loss", "val/loss", "val/rewards/chosen", "val/closed_acc"} <= columns
+        # Loads merged into its parent, merged into the base, e.g. for eval --adapter.
+        vlm_export.load_finetuned(best)

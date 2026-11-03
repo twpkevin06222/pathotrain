@@ -6,6 +6,7 @@ unknown key is an error, so typos fail) and raises one :class:`ConfigError`
 listing every problem.
 """
 
+import json
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -80,6 +81,7 @@ class Stage:
     name: str = "sft"  # a key of pathotrain.pathovlm.stages.STAGES
     preset: str | None = None
     args: dict = field(default_factory=dict)  # into the stage's TRL config class
+    parent: str | None = None  # checkpoint-N folder to start from (merged), e.g. SFT's
 
 
 @dataclass(frozen=True)
@@ -150,9 +152,33 @@ def validate(cfg: dict) -> VLMConfig:
         fixed = sorted(set(stage.args) & set(spec.fixed))
         if fixed:
             errors.append(f"stage.args cannot set {fixed}: {stage.name} needs them as they are")
+    if stage is not None and stage.parent is not None:
+        errors += _parent_errors(stage.parent, model, prompt)
     if errors:
         raise ConfigError("invalid pathovlm config:\n- " + "\n- ".join(errors))
     return VLMConfig(model, adaptation, prompt, data, evaluation, trainer, checkpoint, stage)
+
+
+def _parent_errors(parent: str, model: Model | None, prompt: Prompt | None) -> list[str]:
+    """A parent must be a checkpoint of the same model, image settings and prompt:
+    the run continues its training."""
+    path = Path(parent).expanduser() / "provenance.json"
+    if not path.is_file():
+        return [f"stage.parent is not a pathovlm checkpoint (no provenance.json): {parent}"]
+    prov = json.loads(path.read_text())
+    if model is None or model.name not in VLMS:
+        return []
+    if prov["model"] != model.name:
+        return [f"stage.parent was trained on {prov['model']}, not {model.name}"]
+    errors = []
+    if VLMS[model.name].processor | model.image != prov["image"]:
+        errors.append(f"model.image must give the parent's image settings {prov['image']}")
+    if (
+        prompt is not None
+        and {"system": prompt.system, "instruction": prompt.instruction} != prov["prompt"]
+    ):
+        errors.append(f"prompt must be the parent's {prov['prompt']}")
+    return errors
 
 
 def _parse(cls, section, name: str, errors: list[str]):
