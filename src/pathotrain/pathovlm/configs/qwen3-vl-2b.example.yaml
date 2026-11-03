@@ -41,6 +41,7 @@ trainer:
   save_total_limit: 2         # plus the best, which is always kept
   num_workers: 4
   grad_checkpointing: true
+  peak_tflops: null           # the GPU's dense bf16 peak (spec sheet), for system/mfu; e.g. 209.5 for an RTX 5090
 checkpoint:
   monitor: val/closed_acc     # or val/loss, val/open_em, val/open_f1
 stage:                        # the TRL trainer: see pathotrain.pathovlm.stages
