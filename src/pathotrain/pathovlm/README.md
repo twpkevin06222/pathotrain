@@ -194,9 +194,9 @@ GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.y
   unless resuming.
 - **Stages:** `stage.name` picks the TRL trainer from
   `pathovlm/stages.py` (`STAGES`: `sft`, `dpo` with preset `mpo`, `kto`, `grpo`
-  with preset `gspo`, `rloo`; distillation planned; see
-  [Preference stages](#preference-stages-dpo-kto) and
-  [RL stages](#rl-stages-grpo-gspo-rloo)).
+  with preset `gspo`, `rloo`, `distill`; see
+  [Preference stages](#preference-stages-dpo-kto),
+  [RL stages](#rl-stages-grpo-gspo-rloo) and [Distillation](#distillation)).
   `stage.args` passes any other value of that trainer's
   config class (`SFTConfig` for `sft`), e.g. `{max_grad_norm: 0.5}`. Keys the
   config class does not take, keys pathotrain's sections already set
@@ -348,6 +348,28 @@ Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, batch 8 = one question x
   the same has zero advantage. Expect gains, if any, on open answers.
 - Answers are ~3 tokens, so generation is short; vLLM is not used.
 - No full run or test score yet.
+
+### Distillation
+
+`stage: {name: distill, teacher: runs/<4b>/checkpoint-7371, parent:
+runs/<2b>/checkpoint-7371}` on the plain VQA files: on-policy distillation
+(TRL's `DistillationTrainer`, Agarwal et al. 2024). The student answers each
+question and learns the teacher's next-token distribution over its own answer
+(generalised JSD; `stage.args.beta` 1, the default, is reverse KL). The teacher
+must share the student's vocabulary (Qwen3-VL 4B and 2B do; Lingshu would need
+GOLD, not built) and have the run's image settings and prompt, as it sees the
+student's inputs; it is merged and frozen. The parent is optional (the base
+model as student also works). As for the RL stages, no `val/loss`.
+
+`QwenDistillationTrainer` works around a TRL 1.17.1 bug: the trainer re-pads
+the prompts but keeps the processor's `mm_token_type_ids`, so Qwen3-VL's image
+positions are misaligned on every row but the longest and the forward fails. They are
+rebuilt from the image tokens, as GRPO does.
+
+Smoke run (`qwen3-vl-4b` seed-0 final teacher, `qwen3-vl-2b` SFT final student,
+batch 8 = 8 questions per step, 30 steps, 2026-11-03): ~2.4 s/step, 18.0 GB peak;
+an epoch of PathVQA train is ~2,460 steps (~1.7 h). Loss went from 1.05 to ~0.3-0.7.
+No full run or test score yet.
 
 ## Export
 

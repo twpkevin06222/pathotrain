@@ -21,13 +21,21 @@ reference model of ``dpo`` and ``kto``.
   ``num_generations`` answers per question and rewards them with
   :func:`answer_reward`. Generation is the slow part (Hugging Face generate, no
   vLLM). They have no ``val/loss``: evaluation is the generated answers only.
+- ``distill``: VQA rows as prompts; on-policy distillation (Agarwal et al. 2024):
+  the student answers and learns the ``teacher`` checkpoint's next-token
+  distribution on its own answers (generalised JSD, ``beta`` 1: reverse KL). The
+  teacher must share the vocabulary (Qwen3-VL 4B -> 2B). No ``val/loss`` either.
 """
 
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+import torch
 from trl import (
+    DistillationConfig,
+    DistillationTrainer,
     DPOConfig,
     DPOTrainer,
     GRPOConfig,
@@ -57,6 +65,7 @@ class StageSpec:
     build_dataset: Callable[..., list[dict]] | None = None
     # False: the trainer's own evaluation is skipped (it would generate again), so no val/loss.
     val_loss: bool = True
+    teacher: bool = False  # needs stage.teacher
 
 
 def _prompt(row: dict, prompt) -> list[dict]:
@@ -134,6 +143,20 @@ def answer_reward(completions: list[list[dict]], answer: list[str], type: list[s
     ]
 
 
+class QwenDistillationTrainer(DistillationTrainer):
+    """``DistillationTrainer`` with Qwen-VL's ``mm_token_type_ids`` rebuilt from the
+    image placeholder tokens of prompt + completion, as GRPO does: TRL re-pads the
+    prompts but keeps the processor's ids, so Qwen3-VL's 3-D positions misalign."""
+
+    # shortcut: works around trl 1.17.1's distillation trainer, drop when trl fixes it
+    def _generate_and_score_completions(self, inputs):
+        output = super()._generate_and_score_completions(inputs)
+        if "mm_token_type_ids" in output:
+            ids = torch.cat([output["prompt_ids"], output["completion_ids"]], dim=1)
+            output["mm_token_type_ids"] = (ids == self._image_pad_token_id).long()
+        return output
+
+
 # Truncation would cut image tokens (up to 1024 for Qwen3-VL) or the answer.
 NO_TRUNCATION = {"max_length": None}
 
@@ -190,4 +213,18 @@ STAGES = {
         build_dataset=prompts,
         val_loss=False,
     ),
+    "distill": StageSpec(
+        DistillationConfig,
+        QwenDistillationTrainer,
+        trainer_kwargs=lambda c, processor: {"teacher_model": _teacher(c.stage.teacher)},
+        build_dataset=prompts,
+        val_loss=False,
+        teacher=True,
+    ),
 }
+
+
+def _teacher(checkpoint: str):
+    from pathotrain.pathovlm.export import load_finetuned  # needs peft, as in eval
+
+    return load_finetuned(Path(checkpoint).expanduser())[0]

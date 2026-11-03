@@ -1,5 +1,5 @@
-"""LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO, GRPO, RLOO), from one
-YAML::
+"""LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO, GRPO, RLOO,
+distillation), from one YAML::
 
     python -m pathotrain.pathovlm.train config.yaml
     python -m pathotrain.pathovlm.train config.yaml --resume runs/vqa01/checkpoint-1000
@@ -17,7 +17,7 @@ pathotrain run. Sections (``?`` marks optional ones)::
     eval?: {max_samples: 2048, max_new_tokens: 32, batch_size: 16}
     trainer?: {epochs, lr, batch_size, accumulate, warmup, weight_decay, eval_steps, ...}
     checkpoint?: {monitor: val/closed_acc}       # or val/loss, val/open_em, val/open_f1
-    stage?: {name: sft, preset: null, args: {}, parent: null}  # see pathotrain.pathovlm.stages
+    stage?: {name: sft, preset: null, args: {}, parent: null, teacher: null}  # see .stages
 
 Every ``eval_steps`` optimizer steps: ``val/loss`` on ``val_max_samples`` rows,
 answers generated for ``eval.max_samples`` rows (``val/closed_acc``,
@@ -158,6 +158,7 @@ def provenance(c: VLMConfig, targets: list[str]) -> dict:
         "base": f"{vlm.repo}@{vlm.revision}",
         "stage": {"name": c.stage.name, "preset": c.stage.preset},
         "parent": str(Path(c.stage.parent).expanduser().resolve()) if c.stage.parent else None,
+        "teacher": str(Path(c.stage.teacher).expanduser().resolve()) if c.stage.teacher else None,
         "image": vlm.processor | c.model.image,
         "adaptation": {
             "type": "lora",
