@@ -1,5 +1,5 @@
 """LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO, GRPO, RLOO,
-distillation), from one YAML::
+distillation, online DPO), from one YAML::
 
     python -m pathotrain.pathovlm.train config.yaml
     python -m pathotrain.pathovlm.train config.yaml --resume runs/vqa01/checkpoint-1000
@@ -141,8 +141,10 @@ def training_args(cfg: dict, c: VLMConfig):
         "dataloader_num_workers": t.num_workers,
         "report_to": "none",  # logged by PathotrainLogging instead
     }
-    if "max_completion_length" in {f.name for f in fields(spec.config_cls)}:  # grpo, rloo
-        curated["max_completion_length"] = c.eval.max_new_tokens  # as long as evaluation's answers
+    # Stages that generate while training: answers as long as evaluation's.
+    for length in ("max_completion_length", "max_new_tokens"):  # online_dpo calls it max_new_tokens
+        if length in {f.name for f in fields(spec.config_cls)}:
+            curated[length] = c.eval.max_new_tokens
     taken = sorted(set(c.stage.args) & set(curated))
     if taken:
         raise ConfigError(f"stage.args {taken} are set by pathotrain's sections (trainer, ...)")

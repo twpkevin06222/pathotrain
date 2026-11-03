@@ -194,9 +194,10 @@ GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.y
   unless resuming.
 - **Stages:** `stage.name` picks the TRL trainer from
   `pathovlm/stages.py` (`STAGES`: `sft`, `dpo` with preset `mpo`, `kto`, `grpo`
-  with preset `gspo`, `rloo`, `distill`; see
+  with preset `gspo`, `rloo`, `distill`, `online_dpo`; see
   [Preference stages](#preference-stages-dpo-kto),
-  [RL stages](#rl-stages-grpo-gspo-rloo) and [Distillation](#distillation)).
+  [RL stages](#rl-stages-grpo-gspo-rloo), [Distillation](#distillation) and
+  [Online DPO](#online-dpo)).
   `stage.args` passes any other value of that trainer's
   config class (`SFTConfig` for `sft`), e.g. `{max_grad_norm: 0.5}`. Keys the
   config class does not take, keys pathotrain's sections already set
@@ -370,6 +371,24 @@ Smoke run (`qwen3-vl-4b` seed-0 final teacher, `qwen3-vl-2b` SFT final student,
 batch 8 = 8 questions per step, 30 steps, 2026-11-03): ~2.4 s/step, 18.0 GB peak;
 an epoch of PathVQA train is ~2,460 steps (~1.7 h). Loss went from 1.05 to ~0.3-0.7.
 No full run or test score yet.
+
+### Online DPO
+
+`stage: {name: online_dpo, parent: runs/<sft>/checkpoint-7371}` on the plain VQA
+files: TRL's **experimental** `OnlineDPOTrainer` (`trl.experimental`, whose API
+may change between releases; trl is pinned to 1.17.1). For each question the
+model samples two answers (at most `eval.max_new_tokens`), `answer_reward`
+scores both, the higher-scoring one is chosen (the first on a tie) and the DPO
+loss is taken against the merged parent. Ties carry no real preference: when
+both answers are the same text the loss gives no gradient, but two different
+answers with equal scores still get pushed apart arbitrarily. No `val/loss`.
+
+Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, batch 8 = 8 questions x
+2 answers per step, 30 steps, 2026-11-03): ~4.8 s/step including two
+evaluations, **25.8 GB peak** (full-vocabulary log-probabilities over every
+sequence, for the policy and the reference); an epoch of PathVQA train is
+~2,460 steps (~3.3 h). Reward accuracy rose from 0.03 to 0.23; the KL to the
+parent was noisy (2-28). No full run or test score yet.
 
 ## Export
 

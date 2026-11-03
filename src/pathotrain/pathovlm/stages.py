@@ -25,6 +25,9 @@ reference model of ``dpo`` and ``kto``.
   the student answers and learns the ``teacher`` checkpoint's next-token
   distribution on its own answers (generalised JSD, ``beta`` 1: reverse KL). The
   teacher must share the vocabulary (Qwen3-VL 4B -> 2B). No ``val/loss`` either.
+- ``online_dpo`` (TRL experimental, Guo et al. 2024): VQA rows as prompts; two
+  sampled answers per question, the one :func:`answer_reward` scores higher
+  chosen (the first on a tie), DPO loss against the merged parent. No ``val/loss``.
 """
 
 import random
@@ -47,6 +50,7 @@ from trl import (
     SFTConfig,
     SFTTrainer,
 )
+from trl.experimental.online_dpo import OnlineDPOConfig, OnlineDPOTrainer
 
 from pathotrain.pathovlm.collate import VQACollator
 from pathotrain.pathovlm.metrics import correct, normalize, token_f1
@@ -220,6 +224,13 @@ STAGES = {
         build_dataset=prompts,
         val_loss=False,
         teacher=True,
+    ),
+    "online_dpo": StageSpec(
+        OnlineDPOConfig,
+        OnlineDPOTrainer,
+        trainer_kwargs=lambda c, processor: {"reward_funcs": [answer_reward]},
+        build_dataset=prompts,
+        val_loss=False,
     ),
 }
 
