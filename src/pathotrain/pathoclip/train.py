@@ -11,7 +11,8 @@ marks optional ones)::
 
     name, seed, output_dir, mlflow_db?
     model: {name: siglip2-base-224}
-    adaptation?: {type: lora, rank: 16, alpha: 32, dropout: 0.05, targets: [q_proj, ...]}  # or full
+    adaptation?: {type: lora, rank: 16, alpha: 32, dropout: 0.05, targets: [q_proj, ...],
+                  towers: [vision, text]}  # or type: full; towers: [text] freezes the image tower
     data: {train: arch/train.jsonl, val: arch/val.jsonl, root?: null}  # pathotrain.dataloader.caption
     eval?: {test: crc/test.csv, train?: crc/train.csv, template: "an H&E image of {}.", prompts?: {}}
     task?: {lr: 1.0e-4, weight_decay: 0.0, warmup_epochs: 0.5}
@@ -32,7 +33,7 @@ from pathotrain.dataloader import ClassTileDataset
 from pathotrain.dataloader.caption import CaptionDataset
 from pathotrain.engine import load_config, load_trainable_state
 from pathotrain.histossl.eval.linear_probe import probe_transform
-from pathotrain.pathoclip.config import Adaptation, CLIPConfig, Eval, validate
+from pathotrain.pathoclip.config import TOWERS, Adaptation, CLIPConfig, Eval, adaptation, validate
 from pathotrain.pathoclip.data import CaptionCollator
 from pathotrain.pathoclip.models import CLIPS, TEXT_LENGTH, load_clip
 from pathotrain.pathoclip.task import ContrastiveTask
@@ -40,9 +41,13 @@ from pathotrain.pathoclip.zero_shot import evaluator
 
 
 def adapt(model: nn.Module, a: Adaptation) -> nn.Module:
-    """``model`` with LoRA on the blocks' ``a.targets`` of both towers (the logit
-    scale and bias train too), or itself for full fine-tuning."""
+    """``model`` with LoRA on the blocks' ``a.targets`` of ``a.towers`` (the logit
+    scale and bias train too), or itself fully trainable but for the towers not in
+    ``a.towers``."""
     if a.type == "full":
+        for tower, module in TOWERS.items():
+            if tower not in a.towers:
+                getattr(model, module).requires_grad_(False)
         return model
     try:
         from peft import LoraConfig, get_peft_model
@@ -51,7 +56,8 @@ def adapt(model: nn.Module, a: Adaptation) -> nn.Module:
             "LoRA needs the histossl extra: pip install 'pathotrain[histossl]'"
         ) from e
     # Blocks only: the vision tower's attention-pooling head has an out_proj too.
-    pattern = rf".*\.layers\.\d+\.(self_attn|mlp)\.({'|'.join(a.targets)})"
+    towers = "|".join(TOWERS[t] for t in a.towers)
+    pattern = rf".*({towers})\.encoder\.layers\.\d+\.(self_attn|mlp)\.({'|'.join(a.targets)})"
     config = LoraConfig(
         r=a.rank, lora_alpha=a.alpha, lora_dropout=a.dropout, target_modules=pattern
     )
@@ -90,7 +96,8 @@ def provenance(c: CLIPConfig, processor) -> dict:
             {"rank": a.rank, "alpha": a.alpha, "targets": list(a.targets)}
             if a.type == "lora"
             else {}
-        ),
+        )
+        | {"towers": list(a.towers)},
         "input_size": ip.size["height"],
         "normalisation": {"mean": list(ip.image_mean), "std": list(ip.image_std)},
         "text_length": TEXT_LENGTH,
@@ -138,9 +145,9 @@ def load_model(path: str | Path) -> tuple[nn.Module, object, dict]:
     if "config" not in ckpt:
         raise ValueError(f"{path} has no config; it was not written by pathotrain.pathoclip.train")
     cfg = ckpt["config"]
-    a = Adaptation(**cfg.get("adaptation", {}))
+    a = adaptation(cfg.get("adaptation", {}))
     model, processor = load_clip(cfg["model"]["name"])
-    model = adapt(model, Adaptation(**{**a.__dict__, "targets": tuple(a.targets)}))
+    model = adapt(model, a)
     if a.type == "lora":  # checkpoints hold the trainable weights only
         load_trainable_state(model, ckpt["model"])
     else:

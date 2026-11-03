@@ -15,6 +15,7 @@ from pathotrain.pathoclip.models import CLIPS
 ADAPTATIONS = ("lora", "full")
 # Linear layers of both towers' transformer blocks.
 LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2")
+TOWERS = {"vision": "vision_model", "text": "text_model"}  # config name -> SigLIP module
 
 
 class ConfigError(ValueError):
@@ -33,6 +34,7 @@ class Adaptation:
     alpha: int = 32
     dropout: float = 0.05
     targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "out_proj")
+    towers: tuple[str, ...] = ("vision", "text")  # the others stay frozen, e.g. [text]: LiT
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,8 @@ def validate(cfg: dict) -> CLIPConfig:
         unknown = sorted(set(adaptation.targets) - set(LORA_TARGETS))
         if unknown or not adaptation.targets:
             errors.append(f"adaptation.targets must be a non-empty subset of {LORA_TARGETS}")
+        if not adaptation.towers or set(adaptation.towers) - set(TOWERS):
+            errors.append(f"adaptation.towers must be a non-empty subset of {sorted(TOWERS)}")
     if data is not None:
         for split in ("train", "val"):
             if not Path(getattr(data, split)).expanduser().is_file():
@@ -116,6 +120,12 @@ def validate(cfg: dict) -> CLIPConfig:
     return CLIPConfig(model, adaptation, data, evaluation, task)
 
 
+def adaptation(section: dict) -> Adaptation:
+    """The ``adaptation`` section with its lists as tuples."""
+    a = Adaptation(**section)
+    return Adaptation(**{**a.__dict__, "targets": tuple(a.targets), "towers": tuple(a.towers)})
+
+
 def _parse(cls, section, name: str, errors: list[str]):
     if not isinstance(section, dict):
         errors.append(f"{name} must be a mapping, got {section!r}")
@@ -129,6 +139,6 @@ def _parse(cls, section, name: str, errors: list[str]):
     except TypeError as e:  # a required key is missing
         errors.append(f"{name}: {e}")
         return None
-    if cls is Adaptation:  # YAML gives a list
-        return Adaptation(**{**section, "targets": tuple(parsed.targets)})
+    if cls is Adaptation:  # YAML gives lists
+        return adaptation(section)
     return parsed
