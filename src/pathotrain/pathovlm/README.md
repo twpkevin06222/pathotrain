@@ -222,38 +222,54 @@ Measured on one RTX 5090:
 | smolvlm2-500m, 8 PathVQA rows, train = val (smoke) | 80 | 1 min | - | memorises all 8: closed acc, open EM and F1 = 1.0 by step 20 |
 | qwen3-vl-2b, batch 8, 2% of an epoch, 2 evaluations | 50 | 72 s | 8.9 GB | runs end to end; open EM 0.08-0.09 on 128 val rows after 400 examples (zero-shot: 0.04 on test) |
 | qwen3-vl-2b example config, 3 epochs, 15 evaluations | 7,371 | 1 h 18 min | ~11 GB (one reading, not tracked) | below; adapter 67 MB |
-| qwen3-vl-4b example config (batch 4 x 2), 3 epochs, 15 evaluations | 7,371 | 2 h 11 min | 17.3 GB | below; adapter 127 MB |
+| qwen3-vl-4b, batch 4 x 2, 3 epochs, 15 evaluations on 512 rows (seed 0) | 7,371 | 2 h 11 min | 17.3 GB | below; adapter 127 MB |
+| qwen3-vl-4b example config (batch 4 x 2), 15 evaluations on 2,048 rows (seed 1) | 7,371 | 2 h 35 min | 21.8 GB | below |
+| qwen3-vl-4b, batch 8 x 1, eval batch 32 (smoke, 2,048-row evaluations) | 51 | same as 4 x 2 | 27.9 GB | no faster: ~1.0 vs ~1.1 steps/s, evaluation equally long |
+| qwen3-vl-4b, batch 4 x 2 without gradient checkpointing (smoke) | - | - | > 32 GB | out of memory at step 12 |
+
+The 4B example already keeps the GPU busy at batch 4 x 2, so the free memory
+buys no speed: a larger micro-batch or generation batch is not faster, and
+dropping gradient checkpointing does not fit. The time to cut is evaluation: each one (val/loss on
+1,024 rows, answers to 2,048) takes ~3 min, ~45 min of a 2 h 35 min run; raise
+`trainer.eval_steps` to evaluate less often.
 
 ### LoRA fine-tuning on PathVQA
 
-The example configs as shipped (rank 16 on all language-model linear layers,
-lr 2e-4 cosine, 3 epochs, effective batch 8, seed 0), scored on PathVQA test
-(6,719 questions) with `eval --adapter`. "best" is the checkpoint chosen by
-`val/closed_acc` on 512 validation rows, "final" the last one.
+The example configs (rank 16 on all language-model linear layers, lr 2e-4
+cosine, 3 epochs, effective batch 8), scored on PathVQA test (6,719 questions)
+with `eval --adapter`. "best" is the checkpoint chosen by `val/closed_acc` on
+512 validation rows (seed 0) or 2,048 (seed 1, today's default), "final" the
+last one.
 
 | Model | Checkpoint | closed_acc | open_em | open_f1 | open_recall |
 |---|---|---|---|---|---|
 | always "yes" | | 0.540 | - | - | - |
 | `qwen3-vl-2b` | zero-shot | 0.632 | 0.039 | 0.062 | 0.062 |
-| `qwen3-vl-2b` | best (step 4500) | 0.914 | 0.310 | 0.353 | 0.352 |
-| `qwen3-vl-2b` | final (step 7371) | 0.918 | 0.326 | 0.369 | 0.371 |
+| `qwen3-vl-2b` | seed 0, best (step 4500) | 0.914 | 0.310 | 0.353 | 0.352 |
+| `qwen3-vl-2b` | seed 0, final (step 7371) | 0.918 | 0.326 | 0.369 | 0.371 |
 | `qwen3-vl-4b` | zero-shot | 0.684 | 0.030 | 0.058 | 0.059 |
-| `qwen3-vl-4b` | best (step 5000) | 0.932 | 0.331 | 0.378 | 0.379 |
-| `qwen3-vl-4b` | final (step 7371) | **0.933** | **0.353** | **0.402** | **0.404** |
+| `qwen3-vl-4b` | seed 0, best (step 5000) | 0.932 | 0.331 | 0.378 | 0.379 |
+| `qwen3-vl-4b` | seed 0, final (step 7371) | 0.933 | **0.353** | **0.402** | **0.404** |
+| `qwen3-vl-4b` | seed 1, best (step 6500) | **0.940** | 0.338 | 0.384 | 0.386 |
+| `qwen3-vl-4b` | seed 1, final (step 7371) | 0.936 | 0.343 | 0.391 | 0.394 |
 
 - Fine-tuning is what matters: +28 / +25 points closed accuracy and ~8x open
-  EM over zero-shot. 4B over 2B adds ~1.5 points closed and ~3 points open EM
-  and F1, for 1.7x the training time and twice the adapter size.
+  EM over zero-shot. 4B over 2B adds ~1.5-2 points closed and ~2-3 points open
+  EM and F1, for 1.7x the training time and twice the adapter size.
+- Seed to seed (4B, final checkpoints): 0.3 points closed accuracy, 1 point
+  open EM and F1. The 2B-to-4B gap is larger than that; differences under ~1
+  point between single runs are not.
 - `val/loss` is lowest around 1.8 epochs and rises in epoch 3 (2B: 0.937 to
   1.067, 4B: 0.817 to 0.946), but the generated answers keep improving: the
   final checkpoint beats the "best" one on test for both models. Answer-only
   cross-entropy rises as the model grows more confident on the answers it gets
   wrong; it is not the metric to stop on here.
-- 512 validation rows (~270 closed) give `val/closed_acc` steps of ~0.4
-  points and noise of ~2, too coarse to choose between late checkpoints.
-  Raise `eval.max_samples` or monitor `val/open_f1` for the choice to mean
-  more; untried.
-- One seed per model, no hyperparameter search.
+- 512 validation rows (~270 closed) were too few to choose between late
+  checkpoints: "best" lost to "final" on test in both seed-0 runs. With 2,048
+  (now the default) the choice held up on closed accuracy (best 0.940 vs final
+  0.936) but not on open answers (0.338 vs 0.343 EM): `val/closed_acc` picks
+  for closed questions. Within seed noise either way.
+- Two seeds for 4B, one for 2B, no hyperparameter search.
 
 ## Export
 

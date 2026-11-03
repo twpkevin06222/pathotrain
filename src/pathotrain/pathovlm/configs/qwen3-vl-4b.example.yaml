@@ -25,14 +25,14 @@ data:
   val: pathvqa/validation.jsonl     # example
   val_max_samples: 1024             # evenly spaced rows for val/loss
 eval:
-  max_samples: 512            # evenly spaced val rows answered by generation each evaluation (0: off)
+  max_samples: 2048           # evenly spaced val rows answered by generation each evaluation (0: off)
   max_new_tokens: 32
   batch_size: 16
 
 trainer:
   epochs: 3
   lr: 2.0e-4
-  batch_size: 4               # example: peak 17.3 GB on an RTX 5090 (2.2 h for 3 epochs); 8 x 1 untried
+  batch_size: 4               # example: RTX 5090, 21.8 GB peak, 2.6 h; 8 x 1 is no faster, no grad checkpointing OOMs
   accumulate: 2
   warmup: 0.03                # share of the steps
   weight_decay: 0.0

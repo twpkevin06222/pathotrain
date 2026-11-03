@@ -25,7 +25,7 @@ data:
   val: pathvqa/validation.jsonl     # example
   val_max_samples: 1024             # evenly spaced rows for val/loss
 eval:
-  max_samples: 512            # evenly spaced val rows answered by generation each evaluation (0: off)
+  max_samples: 2048           # evenly spaced val rows answered by generation each evaluation (0: off)
   max_new_tokens: 32
   batch_size: 16
 
