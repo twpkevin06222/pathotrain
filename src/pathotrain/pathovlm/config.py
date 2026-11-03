@@ -49,7 +49,7 @@ class Data:
 
 @dataclass(frozen=True)
 class Eval:
-    max_samples: int = 512  # evenly spaced val rows answered by generation each evaluation
+    max_samples: int = 2048  # evenly spaced val rows answered by generation each evaluation
     max_new_tokens: int = 32
     batch_size: int = 16
 

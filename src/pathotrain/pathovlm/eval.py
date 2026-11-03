@@ -89,11 +89,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.max_samples and len(dataset) > args.max_samples:
         keep = np.linspace(0, len(dataset) - 1, args.max_samples).round().astype(int)
         dataset, rows = Subset(dataset, keep), [rows[i] for i in keep]
-    model, processor = load_vlm(args.model, **prov["image"])
     if args.adapter:
-        from peft import PeftModel
+        from pathotrain.pathovlm.export import load_finetuned  # needs peft
 
-        model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
+        model, processor, _ = load_finetuned(args.adapter)
+    else:
+        model, processor = load_vlm(args.model)
     model.to("cuda" if torch.cuda.is_available() else "cpu")
     predictions = generate_answers(
         model,

@@ -13,7 +13,7 @@ pathotrain run. Sections (``?`` marks optional ones)::
     adaptation?: {rank: 16, alpha: 32, dropout: 0.05, targets: [q_proj, ...]}
     prompt?: {system: null, instruction: "Answer the question using a single word or phrase."}
     data: {train: pathvqa/train.jsonl, val: pathvqa/validation.jsonl, val_max_samples?: 1024}
-    eval?: {max_samples: 512, max_new_tokens: 32, batch_size: 16}
+    eval?: {max_samples: 2048, max_new_tokens: 32, batch_size: 16}
     trainer?: {epochs, lr, batch_size, accumulate, warmup, weight_decay, eval_steps, ...}
     checkpoint?: {monitor: val/closed_acc}       # or val/loss, val/open_em, val/open_f1
 
