@@ -267,8 +267,9 @@ def test_preference_and_rl_stages_train_from_an_sft_parent(tmp_path, monkeypatch
     expected = {"dpo": "val/rewards/chosen", "kto": "val/rewards/chosen"}
     expected |= {"grpo": "train/rewards/answer_reward/mean", "rloo": "train/reward"}
     expected |= {"distill": "train/loss"}  # the tiny SFT model teaches itself
+    expected |= {"online_dpo": "train/objective/rlhf_reward"}
     for stage, logged in expected.items():
-        rl = stage in ("grpo", "rloo", "distill")  # prompts only, no val/loss
+        rl = stage in ("grpo", "rloo", "distill", "online_dpo")  # prompts only, no val/loss
         run = {
             **cfg,
             "name": f"vqa_{stage}",
