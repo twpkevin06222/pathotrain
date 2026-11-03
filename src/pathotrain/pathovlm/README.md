@@ -188,9 +188,18 @@ GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.y
 `configs/qwen3-vl-4b.example.yaml`.
 
 - **Like every pathotrain run:** the YAML is checked first (unknown keys and
-  missing files are errors, all listed at once) and translated to `SFTConfig`;
-  the config is copied to `<output_dir>/config.yaml` with a `train.log` beside
-  it, and a changed config for an existing run is refused unless resuming.
+  missing files are errors, all listed at once) and translated to the stage's
+  TRL config; the config is copied to `<output_dir>/config.yaml` with a
+  `train.log` beside it, and a changed config for an existing run is refused
+  unless resuming.
+- **Stages:** `stage.name` picks the TRL trainer from
+  `pathovlm/stages.py` (`STAGES`; only `sft` so far, DPO / KTO / GRPO / RLOO /
+  distillation planned). `stage.args` passes any other value of that trainer's
+  config class (`SFTConfig` for `sft`), e.g. `{max_grad_norm: 0.5}`. Keys the
+  config class does not take, keys pathotrain's sections already set
+  (`learning_rate` comes from `trainer.lr`), and values the stage needs as they
+  are (`remove_unused_columns` for `sft`) are errors before anything loads. The
+  stage is recorded in every checkpoint's `provenance.json`.
 - **Logging:** a callback forwards TRL's logs to pathotrain's MLflow and CSV
   loggers under the usual names: `train/loss`, `train/lr`, `val/loss`,
   `val/closed_acc`, ..., end-of-run summary under `run/`, and the best

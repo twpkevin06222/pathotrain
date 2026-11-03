@@ -16,6 +16,7 @@ pathotrain run. Sections (``?`` marks optional ones)::
     eval?: {max_samples: 2048, max_new_tokens: 32, batch_size: 16}
     trainer?: {epochs, lr, batch_size, accumulate, warmup, weight_decay, eval_steps, ...}
     checkpoint?: {monitor: val/closed_acc}       # or val/loss, val/open_em, val/open_f1
+    stage?: {name: sft, preset: null, args: {}}  # see pathotrain.pathovlm.stages
 
 Every ``eval_steps`` optimizer steps: ``val/loss`` on ``val_max_samples`` rows,
 answers generated for ``eval.max_samples`` rows (``val/closed_acc``,
@@ -35,18 +36,17 @@ import numpy as np
 import torch
 from peft import LoraConfig
 from torch import nn
-from trl import SFTConfig, SFTTrainer
 
 from pathotrain import experiment
 from pathotrain.dataloader.vqa import VQADataset
 from pathotrain.engine import CSVLogger, MLflowLogger, flatten, load_config
 from pathotrain.engine.logger import sqlite_store
 from pathotrain.pathovlm.callbacks import PathotrainLogging, Provenance
-from pathotrain.pathovlm.collate import VQACollator
-from pathotrain.pathovlm.config import MONITORS, VLMConfig, validate
+from pathotrain.pathovlm.config import MONITORS, ConfigError, VLMConfig, validate
 from pathotrain.pathovlm.eval import generate_answers
 from pathotrain.pathovlm.metrics import score
 from pathotrain.pathovlm.models import VLMS, load_vlm
+from pathotrain.pathovlm.stages import STAGES
 
 
 def lora_targets(model: nn.Module, names: tuple[str, ...]) -> list[str]:
@@ -60,10 +60,11 @@ def lora_targets(model: nn.Module, names: tuple[str, ...]) -> list[str]:
     )
 
 
-class VQATrainer(SFTTrainer):
-    """SFTTrainer whose evaluation also answers the ``generation_set`` questions by
-    generation and adds their scores (:func:`~pathotrain.pathovlm.metrics.score`),
-    so they are logged and can choose the best checkpoint."""
+class GenerationEval:
+    """Mixed into a stage's trainer class: its evaluation also answers the
+    ``generation_set`` questions by generation and adds their scores
+    (:func:`~pathotrain.pathovlm.metrics.score`), so they are logged and can choose
+    the best checkpoint, the same for every stage."""
 
     def __init__(self, *args, generation_set=None, generation_kwargs=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -97,12 +98,50 @@ def hf_dataset(jsonl: str, n: int | None = None) -> datasets.Dataset:
     return table.cast_column("image", datasets.Image(mode="RGB"))
 
 
+def training_args(cfg: dict, c: VLMConfig):
+    """The stage's TRL config: pathotrain's sections, then the preset, then
+    ``stage.args``, then the values the stage fixes."""
+    spec, t, monitor = STAGES[c.stage.name], c.trainer, c.checkpoint.monitor
+    curated = {
+        "output_dir": str(cfg["output_dir"]),
+        "seed": cfg["seed"],
+        "num_train_epochs": t.epochs,
+        "learning_rate": t.lr,
+        "per_device_train_batch_size": t.batch_size,
+        "per_device_eval_batch_size": t.batch_size,
+        "gradient_accumulation_steps": t.accumulate,
+        "warmup_steps": t.warmup,
+        "weight_decay": t.weight_decay,
+        "lr_scheduler_type": "cosine",
+        "logging_steps": t.logging_steps,
+        "logging_first_step": True,
+        "eval_strategy": "steps",
+        "eval_steps": t.eval_steps,
+        "save_strategy": "steps",
+        "save_steps": t.eval_steps,
+        "save_total_limit": t.save_total_limit,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": monitor.removeprefix("val/"),
+        "greater_is_better": MONITORS[monitor],
+        "bf16": torch.cuda.is_available(),
+        "gradient_checkpointing": t.grad_checkpointing,
+        "dataloader_num_workers": t.num_workers,
+        "report_to": "none",  # logged by PathotrainLogging instead
+    }
+    taken = sorted(set(c.stage.args) & set(curated))
+    if taken:
+        raise ConfigError(f"stage.args {taken} are set by pathotrain's sections (trainer, ...)")
+    preset = spec.presets.get(c.stage.preset, {})
+    return spec.config_cls(**{**curated, **preset, **c.stage.args, **spec.fixed})
+
+
 def provenance(c: VLMConfig, targets: list[str]) -> dict:
     """What an adapter checkpoint must say about how it was trained."""
     vlm = VLMS[c.model.name]
     return {
         "model": c.model.name,
         "base": f"{vlm.repo}@{vlm.revision}",
+        "stage": {"name": c.stage.name, "preset": c.stage.preset},
         "image": vlm.processor | c.model.image,
         "adaptation": {
             "type": "lora",
@@ -122,6 +161,7 @@ def provenance(c: VLMConfig, targets: list[str]) -> dict:
 def train(cfg: dict, resume: str | Path | None = None) -> dict:
     """Run the fine-tuning ``cfg`` describes; return the best metric and checkpoint."""
     c = validate(cfg)
+    args = training_args(cfg, c)  # before experiment.start: bad TRL values fail first
     config_path = experiment.start(cfg, resume)
     out = Path(cfg["output_dir"])
     model, processor = load_vlm(c.model.name, **c.model.image)
@@ -142,54 +182,25 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
     for lg in loggers:
         lg.log_hyperparams(flatten(cfg))
 
-    t, monitor = c.trainer, c.checkpoint.monitor
-    args = SFTConfig(
-        output_dir=str(out),
-        seed=cfg["seed"],
-        num_train_epochs=t.epochs,
-        learning_rate=t.lr,
-        per_device_train_batch_size=t.batch_size,
-        per_device_eval_batch_size=t.batch_size,
-        gradient_accumulation_steps=t.accumulate,
-        warmup_steps=t.warmup,
-        weight_decay=t.weight_decay,
-        lr_scheduler_type="cosine",
-        logging_steps=t.logging_steps,
-        logging_first_step=True,
-        eval_strategy="steps",
-        eval_steps=t.eval_steps,
-        save_strategy="steps",
-        save_steps=t.eval_steps,
-        save_total_limit=t.save_total_limit,
-        load_best_model_at_end=True,
-        metric_for_best_model=monitor.removeprefix("val/"),
-        greater_is_better=MONITORS[monitor],
-        bf16=torch.cuda.is_available(),
-        gradient_checkpointing=t.grad_checkpointing,
-        dataloader_num_workers=t.num_workers,
-        # The collator needs the raw rows (image, question, answer) and labels them itself.
-        remove_unused_columns=False,
-        dataset_kwargs={"skip_prepare_dataset": True},
-        max_length=None,
-        report_to="none",  # logged by PathotrainLogging instead
-    )
-    trainer = VQATrainer(
+    spec, monitor = STAGES[c.stage.name], c.checkpoint.monitor
+    trainer_cls = type(spec.trainer_cls.__name__, (GenerationEval, spec.trainer_cls), {})
+    trainer = trainer_cls(
         model=model,
         args=args,
         train_dataset=hf_dataset(c.data.train),
         eval_dataset=val_loss,
-        data_collator=VQACollator(processor, c.prompt.system, instruction=c.prompt.instruction),
         processing_class=processor,
         peft_config=lora,
         callbacks=[PathotrainLogging(loggers, monitor), Provenance(provenance(c, targets))],
         generation_set=generation_set,
         generation_kwargs={
             "batch_size": c.eval.batch_size,
-            "num_workers": t.num_workers,
+            "num_workers": c.trainer.num_workers,
             "max_new_tokens": c.eval.max_new_tokens,
             "system": c.prompt.system,
             "instruction": c.prompt.instruction,
         },
+        **spec.trainer_kwargs(c, processor),
     )
     trainer.train(resume_from_checkpoint=str(resume) if resume else None)
     return {

@@ -173,3 +173,30 @@ def test_example_configs_are_valid(tmp_path, name):
     data = {"train": _rows(tmp_path / "t.jsonl", 2), "val": _rows(tmp_path / "v.jsonl", 2)}
     parsed = validate({**cfg, "data": {**cfg["data"], **data}})
     assert parsed.model.name == name and parsed.checkpoint.monitor == "val/closed_acc"
+
+
+def test_stage_args_reach_the_trl_config_and_conflicts_are_errors(tmp_path):
+    cfg = _cfg(tmp_path)
+    c = validate(cfg)
+    assert c.stage.name == "sft"  # the default
+    args = vlm_train.training_args(cfg, c)
+    assert args.remove_unused_columns is False and args.learning_rate == 2e-4
+    assert vlm_train.provenance(c, [])["stage"] == {"name": "sft", "preset": None}
+
+    passed = {**cfg, "stage": {"args": {"max_grad_norm": 0.5}}}
+    assert vlm_train.training_args(passed, validate(passed)).max_grad_norm == 0.5
+    curated = {**cfg, "stage": {"args": {"learning_rate": 1e-3}}}  # trainer.lr sets it
+    with pytest.raises(ConfigError, match="learning_rate"):
+        vlm_train.training_args(curated, validate(curated))
+
+    bad = {**cfg, "stage": {"name": "ppo"}}
+    with pytest.raises(ConfigError, match="stage.name"):
+        validate(bad)
+    bad = {
+        **cfg,
+        "stage": {"preset": "mpo", "args": {"lrr": 1, "remove_unused_columns": True}},
+    }
+    with pytest.raises(ConfigError) as e:
+        validate(bad)
+    for part in ["stage.preset", "lrr", "remove_unused_columns"]:
+        assert part in str(e.value)

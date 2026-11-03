@@ -43,3 +43,7 @@ trainer:
   grad_checkpointing: true
 checkpoint:
   monitor: val/closed_acc     # or val/loss, val/open_em, val/open_f1
+stage:                        # the TRL trainer: see pathotrain.pathovlm.stages
+  name: sft
+  preset: null
+  args: {}                    # extra SFTConfig values the sections above do not set, e.g. {max_grad_norm: 0.5}
