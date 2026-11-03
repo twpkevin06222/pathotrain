@@ -1,7 +1,7 @@
 """The pathovlm config schema and its checks, run before anything loads.
 
 :func:`validate` parses the ``model``, ``adaptation``, ``prompt``, ``data``,
-``eval``, ``trainer`` and ``checkpoint`` sections into frozen dataclasses (an
+``eval``, ``trainer``, ``checkpoint`` and ``stage`` sections into frozen dataclasses (an
 unknown key is an error, so typos fail) and raises one :class:`ConfigError`
 listing every problem.
 """
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pathotrain.pathovlm.eval import INSTRUCTION
 from pathotrain.pathovlm.models import VLMS
+from pathotrain.pathovlm.stages import STAGES
 
 LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 MONITORS = {"val/loss": False, "val/closed_acc": True, "val/open_em": True, "val/open_f1": True}
@@ -75,6 +76,13 @@ class Checkpoint:
 
 
 @dataclass(frozen=True)
+class Stage:
+    name: str = "sft"  # a key of pathotrain.pathovlm.stages.STAGES
+    preset: str | None = None
+    args: dict = field(default_factory=dict)  # into the stage's TRL config class
+
+
+@dataclass(frozen=True)
 class VLMConfig:
     model: Model
     adaptation: Adaptation
@@ -83,6 +91,7 @@ class VLMConfig:
     eval: Eval
     trainer: Trainer
     checkpoint: Checkpoint
+    stage: Stage
 
 
 def validate(cfg: dict) -> VLMConfig:
@@ -102,6 +111,7 @@ def validate(cfg: dict) -> VLMConfig:
     evaluation = _parse(Eval, cfg.get("eval", {}), "eval", errors)
     trainer = _parse(Trainer, cfg.get("trainer", {}), "trainer", errors)
     checkpoint = _parse(Checkpoint, cfg.get("checkpoint", {}), "checkpoint", errors)
+    stage = _parse(Stage, cfg.get("stage", {}), "stage", errors)
 
     if model is not None and model.name not in VLMS:
         errors.append(f"model.name must be one of {sorted(VLMS)}, got {model.name!r}")
@@ -125,9 +135,24 @@ def validate(cfg: dict) -> VLMConfig:
         errors.append("checkpoint.monitor needs eval.max_samples > 0 unless it is val/loss")
     if trainer is not None and (trainer.epochs <= 0 or trainer.lr <= 0 or trainer.batch_size < 1):
         errors.append(f"trainer epochs, lr and batch_size must be positive, got {trainer}")
+    spec = STAGES.get(stage.name) if stage is not None else None
+    if stage is not None and spec is None:
+        errors.append(f"stage.name must be one of {sorted(STAGES)}, got {stage.name!r}")
+    if spec is not None:
+        if stage.preset is not None and stage.preset not in spec.presets:
+            errors.append(f"stage.preset for {stage.name} must be one of {sorted(spec.presets)}")
+        known = {f.name for f in fields(spec.config_cls)}
+        unknown = sorted(set(stage.args) - known)
+        if unknown:
+            errors.append(
+                f"stage.args has keys {spec.config_cls.__name__} does not take: {unknown}"
+            )
+        fixed = sorted(set(stage.args) & set(spec.fixed))
+        if fixed:
+            errors.append(f"stage.args cannot set {fixed}: {stage.name} needs them as they are")
     if errors:
         raise ConfigError("invalid pathovlm config:\n- " + "\n- ".join(errors))
-    return VLMConfig(model, adaptation, prompt, data, evaluation, trainer, checkpoint)
+    return VLMConfig(model, adaptation, prompt, data, evaluation, trainer, checkpoint, stage)
 
 
 def _parse(cls, section, name: str, errors: list[str]):
