@@ -8,7 +8,7 @@ tiled over the same tissue, e.g. for virtual staining with
 `pathotrain.pathogen`. A helper, not a trained model: no extra dependencies
 beyond OpenCV and torch.
 
-![H&E and IHC slides before and after registration](figures/registration_example.png)
+![H&E and IHC slides before and after registration](../../../figures/registration_example.png)
 
 Two ACROBAT validation pairs. The IHC slides come in turned 180 degrees and
 shifted on the glass; after registration their tissue lies on the H&E's
