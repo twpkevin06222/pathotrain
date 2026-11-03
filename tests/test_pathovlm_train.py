@@ -19,7 +19,7 @@ from pathotrain.pathovlm import train as vlm_train
 from pathotrain.pathovlm.callbacks import pathotrain_name
 from pathotrain.pathovlm.collate import chat
 from pathotrain.pathovlm.config import ConfigError, validate
-from pathotrain.pathovlm.stages import preference_pairs, unpaired_preferences
+from pathotrain.pathovlm.stages import answer_reward, preference_pairs, unpaired_preferences
 
 
 def _tiny_smolvlm():
@@ -216,7 +216,7 @@ def test_stage_args_reach_the_trl_config_and_conflicts_are_errors(tmp_path):
     assert not (tmp_path / "run").exists()
 
 
-def test_dpo_and_kto_train_from_an_sft_parent_on_sampled_answers(tmp_path, monkeypatch):
+def test_preference_and_rl_stages_train_from_an_sft_parent(tmp_path, monkeypatch):
     monkeypatch.setattr(vlm_train, "load_vlm", lambda name, **image: _tiny_smolvlm())
     monkeypatch.setattr(vlm_export, "load_vlm", lambda name, **image: _tiny_smolvlm())
     cfg = {**_cfg(tmp_path), "eval": {"max_samples": 0}, "checkpoint": {"monitor": "val/loss"}}
@@ -258,21 +258,49 @@ def test_dpo_and_kto_train_from_an_sft_parent_on_sampled_answers(tmp_path, monke
         chat(question), True
     )
 
-    for stage in ("dpo", "kto"):
+    # dpo / kto on the sampled rows; grpo / rloo on plain VQA rows, 2 answers per question.
+    expected = {"dpo": "val/rewards/chosen", "kto": "val/rewards/chosen"}
+    expected |= {"grpo": "train/rewards/answer_reward/mean", "rloo": "train/reward"}
+    for stage, logged in expected.items():
+        rl = stage in ("grpo", "rloo")
         run = {
             **cfg,
             "name": f"vqa_{stage}",
             "output_dir": str(tmp_path / stage),
-            "data": data,
+            "data": cfg["data"] if rl else data,
             "eval": {"max_samples": 4, "max_new_tokens": 3, "batch_size": 4},
             "checkpoint": {"monitor": "val/closed_acc"},
-            "stage": {"name": stage, "parent": sft},
+            "stage": {
+                "name": stage,
+                "parent": sft,
+                "args": {"num_generations": 2} if rl else {},
+            },
         }
         best = vlm_train.train(run)["best_checkpoint"]
         prov = json.loads((Path(best) / "provenance.json").read_text())
         assert prov["stage"]["name"] == stage and prov["parent"] == str(Path(sft).resolve())
         with open(tmp_path / stage / "logs/version_0/metrics.csv", newline="") as f:
             columns = set(csv.DictReader(f).fieldnames)
-        assert {"train/loss", "val/loss", "val/rewards/chosen", "val/closed_acc"} <= columns
+        assert {"train/loss", logged, "val/closed_acc"} <= columns
+        assert ("val/loss" in columns) is not rl  # rl stages: generated scores only
+        with open(tmp_path / stage / "logs/version_0/metrics.csv", newline="") as f:
+            evals = [r["step"] for r in csv.DictReader(f) if r["val/closed_acc"]]
+        assert evals == sorted(set(evals))  # each evaluation once
         # Loads merged into its parent, merged into the base, e.g. for eval --adapter.
         vlm_export.load_finetuned(best)
+
+
+def test_answer_reward_is_the_closed_rule_and_open_token_f1():
+    completions = [
+        [{"role": "assistant", "content": t}] for t in ["Yes.", "no", "lung tissue", "x"]
+    ]
+    rewards = answer_reward(
+        completions, ["yes", "yes", "lung", "lung"], ["closed", "closed", "open", "open"]
+    )
+    assert rewards == [1.0, 0.0, pytest.approx(2 / 3), 0.0]
+
+
+def test_rl_stages_have_no_val_loss_to_monitor(tmp_path):
+    cfg = {**_cfg(tmp_path), "stage": {"name": "grpo"}, "checkpoint": {"monitor": "val/loss"}}
+    with pytest.raises(ConfigError, match="grpo has no val/loss"):
+        validate(cfg)

@@ -1,4 +1,5 @@
-"""LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO), from one YAML::
+"""LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO, GRPO, RLOO), from one
+YAML::
 
     python -m pathotrain.pathovlm.train config.yaml
     python -m pathotrain.pathovlm.train config.yaml --resume runs/vqa01/checkpoint-1000
@@ -28,6 +29,7 @@ folder: the LoRA adapter (``adapter_model.safetensors``), trainer state and
 """
 
 import argparse
+from dataclasses import fields
 from importlib.metadata import version
 from pathlib import Path
 
@@ -65,14 +67,18 @@ class GenerationEval:
     """Mixed into a stage's trainer class: its evaluation also answers the
     ``generation_set`` questions by generation and adds their scores
     (:func:`~pathotrain.pathovlm.metrics.score`), so they are logged and can choose
-    the best checkpoint, the same for every stage."""
+    the best checkpoint, the same for every stage. With ``own_eval=False`` the
+    trainer's own evaluation (its loss) is skipped."""
 
-    def __init__(self, *args, generation_set=None, generation_kwargs=None, **kwargs):
+    def __init__(self, *args, generation_set=None, generation_kwargs=None, own_eval=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.generation_set, self.generation_kwargs = generation_set, generation_kwargs or {}
+        self.own_eval = own_eval
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix="eval"):
-        metrics = super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+        metrics = (
+            super().evaluate(eval_dataset, ignore_keys, metric_key_prefix) if self.own_eval else {}
+        )
         if self.generation_set is None:
             return metrics
         training = self.model.training
@@ -85,6 +91,10 @@ class GenerationEval:
         scores = score(predictions, list(rows["answer"]), list(rows["type"]))
         extra = {f"{metric_key_prefix}_{k}": v for k, v in scores.items() if not k.startswith("n_")}
         self.log(extra)
+        if not self.own_eval:  # what the skipped evaluate does: callbacks, and no second evaluation
+            self.control = self.callback_handler.on_evaluate(
+                self.args, self.state, self.control, extra
+            )
         return {**metrics, **extra}
 
 
@@ -131,6 +141,8 @@ def training_args(cfg: dict, c: VLMConfig):
         "dataloader_num_workers": t.num_workers,
         "report_to": "none",  # logged by PathotrainLogging instead
     }
+    if "max_completion_length" in {f.name for f in fields(spec.config_cls)}:  # grpo, rloo
+        curated["max_completion_length"] = c.eval.max_new_tokens  # as long as evaluation's answers
     taken = sorted(set(c.stage.args) & set(curated))
     if taken:
         raise ConfigError(f"stage.args {taken} are set by pathotrain's sections (trainer, ...)")
@@ -169,6 +181,7 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
     spec, monitor = STAGES[c.stage.name], c.checkpoint.monitor
     build = spec.build_dataset and (lambda rows: spec.build_dataset(rows, c.prompt))
     train_set = hf_dataset(c.data.train, build=build)
+    # Unused when the stage has no val_loss, but the HF Trainer wants an eval dataset.
     val_loss = hf_dataset(c.data.val, c.data.val_max_samples, build)
     generation_set = hf_dataset(c.data.val, c.eval.max_samples) if c.eval.max_samples else None
     config_path = experiment.start(cfg, resume)
@@ -202,6 +215,7 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
         peft_config=lora,
         callbacks=[PathotrainLogging(loggers, monitor), Provenance(provenance(c, targets))],
         generation_set=generation_set,
+        own_eval=spec.val_loss,
         generation_kwargs={
             "batch_size": c.eval.batch_size,
             "num_workers": c.trainer.num_workers,

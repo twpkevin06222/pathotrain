@@ -44,7 +44,7 @@ trainer:
 checkpoint:
   monitor: val/closed_acc     # or val/loss, val/open_em, val/open_f1
 stage:                        # the TRL trainer: see pathotrain.pathovlm.stages
-  name: sft                   # or dpo, kto (data: files written by pathotrain.pathovlm.sample)
-  preset: null                # dpo: mpo
+  name: sft                   # or dpo, kto (data: files written by pathotrain.pathovlm.sample), grpo, rloo
+  preset: null                # dpo: mpo; grpo: gspo
   args: {}                    # extra values of the stage's TRL config (SFTConfig, ...), e.g. {max_grad_norm: 0.5}
-  parent: null                # dpo / kto: the SFT checkpoint-N to start from, merged
+  parent: null                # dpo / kto / grpo / rloo: the SFT checkpoint-N to start from, merged
