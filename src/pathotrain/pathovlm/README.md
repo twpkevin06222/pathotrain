@@ -193,8 +193,9 @@ GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.y
   `train.log` beside it, and a changed config for an existing run is refused
   unless resuming.
 - **Stages:** `stage.name` picks the TRL trainer from
-  `pathovlm/stages.py` (`STAGES`; only `sft` so far, DPO / KTO / GRPO / RLOO /
-  distillation planned). `stage.args` passes any other value of that trainer's
+  `pathovlm/stages.py` (`STAGES`: `sft`, `dpo` with preset `mpo`, `kto`; GRPO /
+  RLOO / distillation planned; see [Preference stages](#preference-stages-dpo-kto)).
+  `stage.args` passes any other value of that trainer's
   config class (`SFTConfig` for `sft`), e.g. `{max_grad_norm: 0.5}`. Keys the
   config class does not take, keys pathotrain's sections already set
   (`learning_rate` comes from `trainer.lr`), and values the stage needs as they
@@ -279,6 +280,42 @@ last one.
   0.936) but not on open answers (0.338 vs 0.343 EM): `val/closed_acc` picks
   for closed questions. Within seed noise either way.
 - Two seeds for 4B, one for 2B, no hyperparameter search.
+
+### Preference stages (DPO, KTO)
+
+PathVQA has no preference data, so it is made from the SFT model's own answers:
+
+```bash
+python -m pathotrain.pathovlm.sample runs/<sft>/checkpoint-7371 pathvqa/train.jsonl samples/train.jsonl --n 4
+python -m pathotrain.pathovlm.sample runs/<sft>/checkpoint-7371 pathvqa/validation.jsonl samples/val.jsonl --n 4 --max-samples 1024
+```
+
+Each row is written again with `samples`: 4 answers sampled at temperature 1
+with the checkpoint's prompt and image settings (`<out>.provenance.json` records
+the checkpoint and settings). Then a config with `data` pointing at these files
+and `stage: {name: dpo, parent: runs/<sft>/checkpoint-7371}` (or `kto`; DPO's
+`preset: mpo`). A sample is right by the metrics' rule (`metrics.correct`:
+closed `closed_acc`'s yes/no, open exact match after normalisation):
+
+- `dpo`: one pair per question and distinct wrong sample, the gold answer
+  chosen. Questions the model always gets right give none.
+- `kto`: every distinct sample, desirable when right, shuffled once (KTO reads in
+  order).
+
+The parent's adapter is merged into the base and a new LoRA adapter trained on
+top, so the reference model is the SFT model. The checkpoint's
+`provenance.json` names its `parent`; `eval --adapter` and `export` merge the
+chain. The parent's image settings and prompt are required (config errors
+otherwise). `val/loss` is the stage's own loss on the val file;
+`val/closed_acc` etc. are generated as for SFT.
+
+Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, 1,024 train and 256 val
+questions sampled, 40 steps of batch 8, 2026-11-03): sampling ~100 s per 1,024
+questions, DPO 1.3 s/step and 10.0 GB peak, KTO 1.0 s/step and 9.4 GB. **The
+SFT model has learned PathVQA train:** only 12 of 504 closed train questions got
+a wrong sample (13 of 127 on val), against 280 of 520 open ones, so pairs from
+train are almost all open questions. Full DPO / KTO runs and their test scores
+are not done yet.
 
 ## Export
 

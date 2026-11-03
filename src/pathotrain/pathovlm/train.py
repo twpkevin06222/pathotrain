@@ -1,4 +1,4 @@
-"""LoRA fine-tuning of a VLM on VQA rows, with TRL's ``SFTTrainer``, from one YAML::
+"""LoRA fine-tuning of a VLM on VQA rows with a TRL trainer (SFT, DPO, KTO), from one YAML::
 
     python -m pathotrain.pathovlm.train config.yaml
     python -m pathotrain.pathovlm.train config.yaml --resume runs/vqa01/checkpoint-1000
@@ -16,7 +16,7 @@ pathotrain run. Sections (``?`` marks optional ones)::
     eval?: {max_samples: 2048, max_new_tokens: 32, batch_size: 16}
     trainer?: {epochs, lr, batch_size, accumulate, warmup, weight_decay, eval_steps, ...}
     checkpoint?: {monitor: val/closed_acc}       # or val/loss, val/open_em, val/open_f1
-    stage?: {name: sft, preset: null, args: {}}  # see pathotrain.pathovlm.stages
+    stage?: {name: sft, preset: null, args: {}, parent: null}  # see pathotrain.pathovlm.stages
 
 Every ``eval_steps`` optimizer steps: ``val/loss`` on ``val_max_samples`` rows,
 answers generated for ``eval.max_samples`` rows (``val/closed_acc``,
@@ -44,6 +44,7 @@ from pathotrain.engine.logger import sqlite_store
 from pathotrain.pathovlm.callbacks import PathotrainLogging, Provenance
 from pathotrain.pathovlm.config import MONITORS, ConfigError, VLMConfig, validate
 from pathotrain.pathovlm.eval import generate_answers
+from pathotrain.pathovlm.export import load_finetuned
 from pathotrain.pathovlm.metrics import score
 from pathotrain.pathovlm.models import VLMS, load_vlm
 from pathotrain.pathovlm.stages import STAGES
@@ -87,14 +88,16 @@ class GenerationEval:
         return {**metrics, **extra}
 
 
-def hf_dataset(jsonl: str, n: int | None = None) -> datasets.Dataset:
+def hf_dataset(jsonl: str, n: int | None = None, build=None) -> datasets.Dataset:
     """The rows of a VQA JSONL (checked by :class:`VQADataset`), or ``n`` evenly
     spaced ones, as a Hugging Face dataset (what TRL takes) whose ``image`` column
-    decodes to an RGB PIL image on access, as :class:`VQADataset` returns it."""
+    decodes to an RGB PIL image on access, as :class:`VQADataset` returns it.
+    ``build`` turns the rows into a stage's records first."""
     rows = VQADataset(jsonl).rows
     if n is not None and len(rows) > n:
         rows = [rows[i] for i in np.linspace(0, len(rows) - 1, n).round().astype(int)]
-    table = datasets.Dataset.from_list([{**r, "image": str(r["image"])} for r in rows])
+    records = [{**r, "image": str(r["image"])} for r in rows]
+    table = datasets.Dataset.from_list(build(records) if build else records)
     return table.cast_column("image", datasets.Image(mode="RGB"))
 
 
@@ -142,6 +145,7 @@ def provenance(c: VLMConfig, targets: list[str]) -> dict:
         "model": c.model.name,
         "base": f"{vlm.repo}@{vlm.revision}",
         "stage": {"name": c.stage.name, "preset": c.stage.preset},
+        "parent": str(Path(c.stage.parent).expanduser().resolve()) if c.stage.parent else None,
         "image": vlm.processor | c.model.image,
         "adaptation": {
             "type": "lora",
@@ -161,10 +165,18 @@ def provenance(c: VLMConfig, targets: list[str]) -> dict:
 def train(cfg: dict, resume: str | Path | None = None) -> dict:
     """Run the fine-tuning ``cfg`` describes; return the best metric and checkpoint."""
     c = validate(cfg)
-    args = training_args(cfg, c)  # before experiment.start: bad TRL values fail first
+    args = training_args(cfg, c)  # before experiment.start: bad TRL values and data fail first
+    spec, monitor = STAGES[c.stage.name], c.checkpoint.monitor
+    build = spec.build_dataset and (lambda rows: spec.build_dataset(rows, c.prompt))
+    train_set = hf_dataset(c.data.train, build=build)
+    val_loss = hf_dataset(c.data.val, c.data.val_max_samples, build)
+    generation_set = hf_dataset(c.data.val, c.eval.max_samples) if c.eval.max_samples else None
     config_path = experiment.start(cfg, resume)
     out = Path(cfg["output_dir"])
-    model, processor = load_vlm(c.model.name, **c.model.image)
+    if c.stage.parent:  # merged: the parent is the base of the new adapter
+        model, processor, _ = load_finetuned(Path(c.stage.parent).expanduser())
+    else:
+        model, processor = load_vlm(c.model.name, **c.model.image)
     targets = lora_targets(model, c.adaptation.targets)
     lora = LoraConfig(
         r=c.adaptation.rank,
@@ -173,8 +185,6 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
         target_modules=targets,
         task_type="CAUSAL_LM",
     )
-    val_loss = hf_dataset(c.data.val, c.data.val_max_samples)
-    generation_set = hf_dataset(c.data.val, c.eval.max_samples) if c.eval.max_samples else None
 
     store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
     loggers = [MLflowLogger(experiment=cfg["name"], **store), CSVLogger(out, name="logs")]
@@ -182,12 +192,11 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
     for lg in loggers:
         lg.log_hyperparams(flatten(cfg))
 
-    spec, monitor = STAGES[c.stage.name], c.checkpoint.monitor
     trainer_cls = type(spec.trainer_cls.__name__, (GenerationEval, spec.trainer_cls), {})
     trainer = trainer_cls(
         model=model,
         args=args,
-        train_dataset=hf_dataset(c.data.train),
+        train_dataset=train_set,
         eval_dataset=val_loss,
         processing_class=processor,
         peft_config=lora,

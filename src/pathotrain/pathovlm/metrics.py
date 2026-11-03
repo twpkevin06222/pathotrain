@@ -42,6 +42,14 @@ def token_recall(prediction: str, gold: str) -> float:
     return sum(t in pred for t in ref) / len(ref) if ref else 0.0
 
 
+def correct(prediction: str, answer: str, type_: str) -> bool:
+    """Whether ``prediction`` counts as right: ``closed_acc``'s rule for a closed
+    question, ``open_em``'s for an open one."""
+    if type_ == "closed":
+        return yes_no(prediction) == normalize(answer)
+    return normalize(prediction) == normalize(answer)
+
+
 def score(predictions: list[str], answers: list[str], types: list[str]) -> dict[str, float]:
     """The metrics above over a split (each key only when its type is present),
     with the question counts ``n_closed`` and ``n_open``."""
@@ -50,11 +58,10 @@ def score(predictions: list[str], answers: list[str], types: list[str]) -> dict[
     out: dict[str, float] = {"n_closed": len(closed), "n_open": len(open_)}
     if closed:
         parsed = [yes_no(p) for p, _ in closed]
-        right = sum(y == normalize(a) for y, (_, a) in zip(parsed, closed, strict=True))
-        out["closed_acc"] = right / len(closed)
+        out["closed_acc"] = sum(correct(p, a, "closed") for p, a in closed) / len(closed)
         out["closed_parsed"] = sum(y is not None for y in parsed) / len(closed)
     if open_:
-        out["open_em"] = sum(normalize(p) == normalize(a) for p, a in open_) / len(open_)
+        out["open_em"] = sum(correct(p, a, "open") for p, a in open_) / len(open_)
         out["open_f1"] = sum(token_f1(p, a) for p, a in open_) / len(open_)
         out["open_recall"] = sum(token_recall(p, a) for p, a in open_) / len(open_)
     return out

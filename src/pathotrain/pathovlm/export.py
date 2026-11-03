@@ -31,9 +31,14 @@ from pathotrain.pathovlm.models import load_vlm
 
 def load_finetuned(checkpoint: str | Path) -> tuple[nn.Module, ProcessorMixin, dict]:
     """The pinned base model with ``checkpoint``'s adapter merged in (bf16, eval
-    mode), the processor with its image settings, and its ``provenance.json``."""
+    mode), the processor with its image settings, and its ``provenance.json``. A
+    checkpoint trained from a ``parent`` checkpoint (e.g. DPO after SFT) is merged
+    into its parent, merged in turn."""
     provenance = json.loads((Path(checkpoint) / "provenance.json").read_text())
-    model, processor = load_vlm(provenance["model"], **provenance["image"])
+    if provenance.get("parent"):
+        model, processor, _ = load_finetuned(provenance["parent"])
+    else:
+        model, processor = load_vlm(provenance["model"], **provenance["image"])
     model = PeftModel.from_pretrained(model, str(checkpoint)).merge_and_unload()
     return model.eval(), processor, provenance
 
