@@ -149,6 +149,10 @@ def validate(cfg: dict) -> VLMConfig:
             errors.append(
                 f"stage.args has keys {spec.config_cls.__name__} does not take: {unknown}"
             )
+        if not spec.val_loss and checkpoint is not None and checkpoint.monitor == "val/loss":
+            errors.append(
+                f"checkpoint.monitor: {stage.name} has no val/loss, only generated scores"
+            )
         fixed = sorted(set(stage.args) & set(spec.fixed))
         if fixed:
             errors.append(f"stage.args cannot set {fixed}: {stage.name} needs them as they are")

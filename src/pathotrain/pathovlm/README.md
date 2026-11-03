@@ -193,8 +193,10 @@ GPU with gradient checkpointing. Example configs: `configs/qwen3-vl-2b.example.y
   `train.log` beside it, and a changed config for an existing run is refused
   unless resuming.
 - **Stages:** `stage.name` picks the TRL trainer from
-  `pathovlm/stages.py` (`STAGES`: `sft`, `dpo` with preset `mpo`, `kto`; GRPO /
-  RLOO / distillation planned; see [Preference stages](#preference-stages-dpo-kto)).
+  `pathovlm/stages.py` (`STAGES`: `sft`, `dpo` with preset `mpo`, `kto`, `grpo`
+  with preset `gspo`, `rloo`; distillation planned; see
+  [Preference stages](#preference-stages-dpo-kto) and
+  [RL stages](#rl-stages-grpo-gspo-rloo)).
   `stage.args` passes any other value of that trainer's
   config class (`SFTConfig` for `sft`), e.g. `{max_grad_norm: 0.5}`. Keys the
   config class does not take, keys pathotrain's sections already set
@@ -316,6 +318,36 @@ SFT model has learned PathVQA train:** only 12 of 504 closed train questions got
 a wrong sample (13 of 127 on val), against 280 of 520 open ones, so pairs from
 train are almost all open questions. Full DPO / KTO runs and their test scores
 are not done yet.
+
+### RL stages (GRPO, GSPO, RLOO)
+
+`stage: {name: grpo, parent: runs/<sft>/checkpoint-7371}` (`preset: gspo` for
+sequence-level importance ratios with the GSPO paper's clipping, or `name:
+rloo`) on the plain VQA files. For each question the trainer samples
+`num_generations` answers (`stage.args`, TRL's default 8; the batch must be a
+multiple of it), at most `eval.max_new_tokens` long, and rewards each with
+`stages.answer_reward`: 1 or 0 for a closed answer by `closed_acc`'s rule,
+token F1 against the gold for an open one. GRPO has no reference model by
+default (`beta: 0`); RLOO's (`beta: 0.05`) is the merged parent. There is no
+`val/loss` (the trainers' own evaluation would generate a second time), so the
+monitor must be a generated score.
+
+Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, batch 8 = one question x
+8 answers per step, 30 steps, Hugging Face generation, 2026-11-03):
+
+| Stage | s / step | Peak GPU memory | Groups with no reward spread |
+|---|---|---|---|
+| grpo | ~1.9 | 8.4 GB | 40-80% |
+| grpo, gspo | ~1.9 | 8.4 GB | 80% |
+| rloo | ~2.0-2.3 | 8.4 GB | 0-40% |
+
+- One question per step makes an epoch of PathVQA train ~19,700 steps (~10 h
+  at this speed); set `stage.args.max_steps` or `trainer.epochs` below 1.
+- Most groups give no gradient: the SFT model already answers most training
+  questions the same way 8 times out of 8, and a group whose answers all score
+  the same has zero advantage. Expect gains, if any, on open answers.
+- Answers are ~3 tokens, so generation is short; vLLM is not used.
+- No full run or test score yet.
 
 ## Export
 

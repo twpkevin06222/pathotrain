@@ -17,16 +17,31 @@ reference model of ``dpo`` and ``kto``.
   (:func:`~pathotrain.pathovlm.metrics.correct`). Right samples usually far
   outnumber wrong ones: see ``desirable_weight`` / ``undesirable_weight`` in
   ``stage.args``.
+- ``grpo`` (preset ``gspo``) and ``rloo``: VQA rows as prompts; the trainer samples
+  ``num_generations`` answers per question and rewards them with
+  :func:`answer_reward`. Generation is the slow part (Hugging Face generate, no
+  vLLM). They have no ``val/loss``: evaluation is the generated answers only.
 """
 
 import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from trl import DPOConfig, DPOTrainer, KTOConfig, KTOTrainer, SFTConfig, SFTTrainer
+from trl import (
+    DPOConfig,
+    DPOTrainer,
+    GRPOConfig,
+    GRPOTrainer,
+    KTOConfig,
+    KTOTrainer,
+    RLOOConfig,
+    RLOOTrainer,
+    SFTConfig,
+    SFTTrainer,
+)
 
 from pathotrain.pathovlm.collate import VQACollator
-from pathotrain.pathovlm.metrics import correct, normalize
+from pathotrain.pathovlm.metrics import correct, normalize, token_f1
 
 
 @dataclass(frozen=True)
@@ -40,6 +55,8 @@ class StageSpec:
     presets: dict[str, dict] = field(default_factory=dict)
     # (VQA records, prompt section) -> the stage's TRL dataset records; None: the records.
     build_dataset: Callable[..., list[dict]] | None = None
+    # False: the trainer's own evaluation is skipped (it would generate again), so no val/loss.
+    val_loss: bool = True
 
 
 def _prompt(row: dict, prompt) -> list[dict]:
@@ -94,6 +111,29 @@ def unpaired_preferences(rows: list[dict], prompt) -> list[dict]:
     return _nonempty(records, "kto")
 
 
+def prompts(rows: list[dict], prompt) -> list[dict]:
+    """grpo / rloo: the question as the prompt, gold answer and type for the reward."""
+    return [
+        {
+            "image": r["image"],
+            "prompt": _prompt(r, prompt),
+            "answer": r["answer"],
+            "type": r["type"],
+        }
+        for r in rows
+    ]
+
+
+def answer_reward(completions: list[list[dict]], answer: list[str], type: list[str], **_):
+    """1 or 0 for a closed answer (``closed_acc``'s rule); token F1 against the gold
+    for an open one, as exact match alone would rarely reward anything."""
+    texts = [c[0]["content"] for c in completions]
+    return [
+        float(correct(t, a, k)) if k == "closed" else token_f1(t, a)
+        for t, a, k in zip(texts, answer, type, strict=True)
+    ]
+
+
 # Truncation would cut image tokens (up to 1024 for Qwen3-VL) or the answer.
 NO_TRUNCATION = {"max_length": None}
 
@@ -126,5 +166,28 @@ STAGES = {
     ),
     "kto": StageSpec(
         KTOConfig, KTOTrainer, fixed=NO_TRUNCATION, build_dataset=unpaired_preferences
+    ),
+    "grpo": StageSpec(
+        GRPOConfig,
+        GRPOTrainer,
+        trainer_kwargs=lambda c, processor: {"reward_funcs": [answer_reward]},
+        # GSPO (Zheng et al. 2025): sequence-level importance ratios, the paper's clipping range.
+        presets={
+            "gspo": {
+                "importance_sampling_level": "sequence",
+                "loss_type": "grpo",
+                "epsilon": 3e-4,
+                "epsilon_high": 4e-4,
+            }
+        },
+        build_dataset=prompts,
+        val_loss=False,
+    ),
+    "rloo": StageSpec(
+        RLOOConfig,
+        RLOOTrainer,
+        trainer_kwargs=lambda c, processor: {"reward_funcs": [answer_reward]},
+        build_dataset=prompts,
+        val_loss=False,
     ),
 }
