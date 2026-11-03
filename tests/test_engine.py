@@ -336,3 +336,51 @@ def test_warmup_must_leave_steps_to_decay():
     task = SegmentationTask(torch.nn.Conv2d(3, 2, 1), 2, warmup_epochs=10)
     with pytest.raises(ValueError, match="warmup"):
         task.configure_optimizers(total_steps=20, steps_per_epoch=2)
+
+
+@pytest.mark.parametrize(("env", "on"), [(None, True), ("0", False), ("true", True)])
+def test_importing_pathotrain_turns_on_mlflow_system_metrics(env, on):
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import pathotrain\n"
+        "from mlflow.environment_variables import MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING as v\n"
+        "print(v.get())"
+    )
+    environ = {k: v for k, v in os.environ.items() if k != "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"}
+    if env is not None:  # the user's own setting wins
+        environ["MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"] = env
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=environ, capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == str(on)
+
+
+def test_peak_gpu_memory_is_empty_off_cuda():
+    from pathotrain.engine.trainer import peak_gpu_memory
+
+    assert peak_gpu_memory(torch.device("cpu")) == {}
+
+
+def test_fit_logs_flops_throughput_and_mfu_per_epoch(tmp_path):
+    csv_logger = CSVLogger(tmp_path)
+    cfg = TrainerConfig(max_epochs=2, **{**CPU, "accumulate": 2, "peak_tflops": 0.5})
+    trainer = Trainer(cfg, loggers=[csv_logger])
+    trainer.fit(_task(), _loader(), _loader())
+    epochs = [r for r in _rows(f"{csv_logger.log_dir}/metrics.csv") if r["val/miou"]]
+    assert len(epochs) == 2
+    for r in epochs:
+        # One optimizer step is two counted-size micro-batches.
+        assert float(r["system/step_tflop"]) == pytest.approx(trainer.step_flops / 1e12)
+        achieved = float(r["system/achieved_tflops"])
+        assert achieved > 0 and float(r["system/mfu"]) == pytest.approx(achieved / 0.5)
+    assert trainer.step_flops > 0
+
+
+def test_throughput_without_a_peak_has_no_mfu():
+    from pathotrain.engine.trainer import throughput
+
+    out = throughput(2e12, steps=10, seconds=4.0)
+    assert out == {"system/step_tflop": 2.0, "system/achieved_tflops": 5.0}

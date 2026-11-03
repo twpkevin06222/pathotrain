@@ -69,6 +69,7 @@ class Trainer:
     save_total_limit: int = 2
     num_workers: int = 4
     grad_checkpointing: bool = True
+    peak_tflops: float | None = None  # the GPU's dense bf16 peak (spec sheet), for system/mfu
 
 
 @dataclass(frozen=True)

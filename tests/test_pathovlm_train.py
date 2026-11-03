@@ -106,6 +106,7 @@ def test_trl_run_logs_like_pathotrain_and_saves_adapter_checkpoints(tmp_path, mo
     with open(run / "logs/version_0/metrics.csv", newline="") as f:
         columns = set(csv.DictReader(f).fieldnames)
     assert {"train/loss", "train/lr", "val/loss", "val/closed_acc", "val/open_f1"} <= columns
+    assert {"system/step_tflop", "system/achieved_tflops"} <= columns  # no peak set: no mfu
     client = mlflow.MlflowClient(f"sqlite:///{tmp_path}/mlflow.db")
     (mlrun,) = client.search_runs([client.get_experiment_by_name("vqa_test").experiment_id])
     assert mlrun.info.status == "FINISHED"

@@ -44,6 +44,7 @@ task:
 trainer:
   max_epochs: 10              # example
   precision: bf16-mixed
+  peak_tflops: null           # the GPU's dense bf16 peak (spec sheet), for system/mfu; e.g. 209.5 for an RTX 5090
 loader:
   batch_size: 64              # in-batch negatives: the larger the better (no gain from accumulate)
   num_workers: 8              # example

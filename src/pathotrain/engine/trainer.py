@@ -6,7 +6,9 @@ GPUs, launch the script with ``fabric run`` or ``torchrun``, or set
 ``devices`` and let :meth:`Trainer.fit` spawn the processes.
 """
 
+import time
 import warnings
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -17,6 +19,7 @@ from lightning_fabric.loggers import Logger
 from loguru import logger
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.flop_counter import FlopCounterMode
 
 from pathotrain.engine.task import Task
 
@@ -40,6 +43,8 @@ class TrainerConfig:
     log_every: int = 50
     # Validate after every `val_every` epochs and after the last one (e.g. when it is slow).
     val_every: int = 1
+    # The GPU's dense peak TFLOP/s at the training precision (its spec sheet), for system/mfu.
+    peak_tflops: float | None = None
 
     def __post_init__(self) -> None:
         if self.log_interval not in ("epoch", "step"):
@@ -84,6 +89,8 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.should_stop = False
+        self.step_flops: int | None = None  # of one optimizer step, counted on the first
+        self.throughput: dict[str, float] = {}
 
     def fit(
         self,
@@ -131,6 +138,7 @@ class Trainer:
                 due = self.epoch % c.val_every == 0 or self.epoch == c.max_epochs
                 metrics = self.validate(val_loader) if val_loader is not None and due else {}
                 logs = {**train, **metrics} if c.log_interval == "epoch" else metrics
+                logs = {**logs, **self.throughput, **peak_gpu_memory(fabric.device)}
                 if logs:
                     fabric.log_dict({"epoch": self.epoch, **logs}, step=self.step)
                 logger.info(f"epoch {self.epoch}/{c.max_epochs} {_fmt({**train, **metrics})}")
@@ -150,12 +158,20 @@ class Trainer:
         task.train()
         totals: dict[str, torch.Tensor] = {}
         steps = 0
+        start = time.perf_counter()
         for i, batch in enumerate(loader):
             last = (i + 1) % c.accumulate == 0 or i + 1 == len(loader)
+            # The run's first micro-batch is counted (forward and backward, as run).
+            count = self.step_flops is None
             # Skip the gradient all-reduce on accumulation steps.
-            with fabric.no_backward_sync(task.model, enabled=not last):
+            with (
+                fabric.no_backward_sync(task.model, enabled=not last),
+                FlopCounterMode(display=False) if count else nullcontext() as flops,
+            ):
                 loss, logs = task.training_step(batch)
                 fabric.backward(loss / c.accumulate)
+            if count:
+                self.step_flops = flops.get_total_flops() * c.accumulate
             if not last:
                 continue
             task.on_before_optimizer_step()
@@ -175,6 +191,10 @@ class Trainer:
                 logs["train/lr"] = self.optimizer.param_groups[0]["lr"]
                 fabric.log_dict({"epoch": self.epoch, **logs}, step=self.step)
                 logger.debug(f"step {self.step} {_fmt(logs)}")
+        if fabric.device.type == "cuda":
+            torch.cuda.synchronize(fabric.device)
+        seconds = time.perf_counter() - start
+        self.throughput = throughput(self.step_flops, steps, seconds, c.peak_tflops)
         means = fabric.all_reduce({k: v / steps for k, v in totals.items()}, reduce_op="mean")
         out = {f"train/{k}": v.item() for k, v in means.items()}
         return {**out, "train/lr": self.optimizer.param_groups[0]["lr"]}
@@ -248,6 +268,31 @@ class Trainer:
             for i, cb in enumerate(self.callbacks)
             if hasattr(cb, "state_dict")
         }
+
+
+def throughput(
+    step_flops: float, steps: int, seconds: float, peak_tflops: float | None = None
+) -> dict[str, float]:
+    """``system/step_tflop`` (TFLOP per optimizer step), ``system/achieved_tflops``
+    (over ``steps`` steps in ``seconds``, data loading included) and, with the GPU's
+    ``peak_tflops``, ``system/mfu`` (their ratio), for one device."""
+    achieved = step_flops * steps / seconds / 1e12
+    out = {"system/step_tflop": step_flops / 1e12, "system/achieved_tflops": achieved}
+    return out | ({"system/mfu": achieved / peak_tflops} if peak_tflops else {})
+
+
+def peak_gpu_memory(device: torch.device) -> dict[str, float]:
+    """PyTorch's peak GPU memory on ``device`` since the last call, in GB: what tensors
+    held (``allocated``) and what its caching allocator held (``reserved``, the
+    one that decides whether a batch fits); empty off CUDA."""
+    if device.type != "cuda":
+        return {}
+    peak = {
+        "system/gpu_peak_allocated_gb": torch.cuda.max_memory_allocated(device) / 1e9,
+        "system/gpu_peak_reserved_gb": torch.cuda.max_memory_reserved(device) / 1e9,
+    }
+    torch.cuda.reset_peak_memory_stats(device)
+    return peak
 
 
 def trainable_state(model: nn.Module) -> dict[str, torch.Tensor]:

@@ -34,6 +34,12 @@ class MLflowLogger(Logger):
     The tracking server comes from ``tracking_uri`` or ``MLFLOW_TRACKING_URI``.
     ``artifact_location`` is where a new experiment stores its artifacts (MLflow's
     default is ``./mlruns`` of the working directory).
+
+    Each run also records MLflow's system metrics every 10 s under ``system/``
+    (CPU and GPU utilisation, system and GPU memory, GPU power, disk, network):
+    importing pathotrain sets ``MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING=1`` unless it is
+    already set (``0`` turns them off); ``MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL``
+    sets the interval in seconds.
     """
 
     def __init__(

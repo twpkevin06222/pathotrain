@@ -14,6 +14,7 @@ dependencies = [
     "loguru>=0.7.3",
     "mlflow>=3.17.2",
     "numpy>=1.26",
+    "nvidia-ml-py>=13.615.71",
     "optuna>=5.0.0",
     "patchology",
     "pillow>=10.0",

@@ -29,6 +29,8 @@ folder: the LoRA adapter (``adapter_model.safetensors``), trainer state and
 """
 
 import argparse
+import statistics
+import time
 from dataclasses import fields
 from importlib.metadata import version
 from pathlib import Path
@@ -38,11 +40,13 @@ import numpy as np
 import torch
 from peft import LoraConfig
 from torch import nn
+from torch.utils.flop_counter import FlopCounterMode
 
 from pathotrain import experiment
 from pathotrain.dataloader.vqa import VQADataset
 from pathotrain.engine import CSVLogger, MLflowLogger, flatten, load_config
 from pathotrain.engine.logger import sqlite_store
+from pathotrain.engine.trainer import throughput
 from pathotrain.pathovlm.callbacks import PathotrainLogging, Provenance
 from pathotrain.pathovlm.config import MONITORS, ConfigError, VLMConfig, validate
 from pathotrain.pathovlm.eval import generate_answers
@@ -96,6 +100,52 @@ class GenerationEval:
                 self.args, self.state, self.control, extra
             )
         return {**metrics, **extra}
+
+
+class FlopCount:
+    """Mixed into a stage's trainer class: counts the FLOPs of the first
+    :data:`COUNTED` training micro-steps (sequence lengths vary with the images, so
+    their mean stands for all) and adds :func:`~pathotrain.engine.trainer.throughput`
+    to every training log, over the time since the previous one without
+    evaluations. The stages that generate while training do it inside
+    ``training_step``, so generation is counted; with ``steps_per_generation`` > 1
+    only some micro-steps generate, and the mean of the first few is rougher."""
+
+    COUNTED = 3
+
+    def __init__(self, *args, peak_tflops: float | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.peak_tflops, self._flops = peak_tflops, []
+        self._last: tuple[float, int] | None = None  # (time, step) of the last training log
+        self._eval_seconds = 0.0
+
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        if len(self._flops) >= self.COUNTED:
+            return super().training_step(model, inputs, num_items_in_batch)
+        with FlopCounterMode(display=False) as counter:
+            loss = super().training_step(model, inputs, num_items_in_batch)
+        self._flops.append(counter.get_total_flops())
+        return loss
+
+    def evaluate(self, *args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return super().evaluate(*args, **kwargs)
+        finally:
+            self._eval_seconds += time.perf_counter() - start
+
+    def log(self, logs: dict, *args, **kwargs):
+        if "loss" in logs and self._flops:  # a training log
+            now, step = time.perf_counter(), self.state.global_step
+            if self._last is not None and step > self._last[1]:
+                seconds = now - self._last[0] - self._eval_seconds
+                step_flops = statistics.mean(self._flops) * self.args.gradient_accumulation_steps
+                logs = {
+                    **logs,
+                    **throughput(step_flops, step - self._last[1], seconds, self.peak_tflops),
+                }
+            self._last, self._eval_seconds = (now, step), 0.0
+        return super().log(logs, *args, **kwargs)
 
 
 def hf_dataset(jsonl: str, n: int | None = None, build=None) -> datasets.Dataset:
@@ -208,7 +258,9 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
     for lg in loggers:
         lg.log_hyperparams(flatten(cfg))
 
-    trainer_cls = type(spec.trainer_cls.__name__, (GenerationEval, spec.trainer_cls), {})
+    # FlopCount first: its evaluate times GenerationEval's generation too.
+    mixins = (FlopCount, GenerationEval, spec.trainer_cls)
+    trainer_cls = type(spec.trainer_cls.__name__, mixins, {})
     trainer = trainer_cls(
         model=model,
         args=args,
@@ -219,6 +271,7 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict:
         callbacks=[PathotrainLogging(loggers, monitor), Provenance(provenance(c, targets))],
         generation_set=generation_set,
         own_eval=spec.val_loss,
+        peak_tflops=c.trainer.peak_tflops,
         generation_kwargs={
             "batch_size": c.eval.batch_size,
             "num_workers": c.trainer.num_workers,

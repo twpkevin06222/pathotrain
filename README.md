@@ -91,8 +91,25 @@ runs/<name>/
 ```
 
 Set `mlflow_db: ~/project/mlflow.db` in the config to also log to MLflow
-(`mlflow ui --backend-store-uri sqlite:///$HOME/project/mlflow.db`). The other
-modules follow the same pattern (`python -m pathotrain.<module>.train
+(`mlflow ui --backend-store-uri sqlite:///$HOME/project/mlflow.db`).
+
+Every run also logs its resource use under `system/`:
+
+- **Every 10 s (MLflow):** CPU and GPU utilisation, system and GPU memory, GPU
+  power, disk and network. Importing pathotrain sets
+  `MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING=1` unless you set it yourself, so every
+  MLflow run in that process records them, including your own `mlflow.start_run()`.
+  Export it as `0` to turn them off; set the interval with
+  `MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL`.
+- **Per epoch, or per log in pathovlm (MLflow and CSV):**
+  - PyTorch's peak GPU memory (`gpu_peak_allocated_gb`, `gpu_peak_reserved_gb`).
+  - The FLOPs of one optimizer step, counted on the first micro-batch(es) (`step_tflop`).
+  - The achieved TFLOP/s over the training time, data loading included
+    (`achieved_tflops`).
+  - With `trainer.peak_tflops` (the GPU's dense bf16 peak from its spec sheet),
+    the model FLOPs utilisation (`mfu`).
+
+The other modules follow the same pattern (`python -m pathotrain.<module>.train
 config.yaml`); see each module's README for its data layout and options.
 
 ## Trainable modules

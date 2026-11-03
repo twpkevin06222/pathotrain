@@ -4,8 +4,11 @@ the same MLflow / CSV loggers and metric names, and provenance in every checkpoi
 import json
 from pathlib import Path
 
+import torch
 from lightning_fabric.loggers import Logger
 from transformers import TrainerCallback
+
+from pathotrain.engine.trainer import peak_gpu_memory
 
 # The end-of-training summary of the HF Trainer (logged once, as its own keys).
 SUMMARY = {"train_runtime", "train_samples_per_second", "train_steps_per_second", "total_flos"}
@@ -13,8 +16,9 @@ SUMMARY = {"train_runtime", "train_samples_per_second", "train_steps_per_second"
 
 def pathotrain_name(key: str) -> str:
     """HF Trainer log key -> pathotrain metric name: ``loss`` -> ``train/loss``,
-    ``learning_rate`` -> ``train/lr``, ``eval_x`` -> ``val/x``, summary -> ``run/x``."""
-    if key == "epoch":
+    ``learning_rate`` -> ``train/lr``, ``eval_x`` -> ``val/x``, summary -> ``run/x``;
+    ``system/x`` (resources, throughput) unchanged."""
+    if key == "epoch" or key.startswith("system/"):
         return key
     if key == "learning_rate":
         return "train/lr"
@@ -27,8 +31,10 @@ def pathotrain_name(key: str) -> str:
 
 class PathotrainLogging(TrainerCallback):
     """Forwards the trainer's logs to pathotrain's loggers (``MLflowLogger``,
-    ``CSVLogger``) under pathotrain names, from the main process only; at the end,
-    logs the best checkpoint as :class:`~pathotrain.engine.ModelCheckpoint` does."""
+    ``CSVLogger``) under pathotrain names, from the main process only, with
+    PyTorch's peak GPU memory since the previous log (``system/gpu_peak_*_gb``);
+    at the end, logs the best checkpoint as :class:`~pathotrain.engine.ModelCheckpoint`
+    does."""
 
     def __init__(self, loggers: list[Logger], monitor: str) -> None:
         self.loggers, self.monitor = loggers, monitor
@@ -39,6 +45,8 @@ class PathotrainLogging(TrainerCallback):
         metrics = {
             pathotrain_name(k): float(v) for k, v in logs.items() if isinstance(v, int | float)
         }
+        if torch.cuda.is_available():
+            metrics |= peak_gpu_memory(torch.device("cuda", torch.cuda.current_device()))
         for lg in self.loggers:
             lg.log_metrics(metrics, step=state.global_step)
 
