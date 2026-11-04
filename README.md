@@ -11,11 +11,13 @@ Training on whole slide images (WSI), built on
 [patchology](https://github.com/twpkevin06222/patchology) for tiling.
 
 pathotrain turns whole slides and their annotations into tiles and trains
-models on them: tissue segmentation, cell detection, virtual staining and
-self-supervised pretraining of pathology foundation models. Every task runs
-from one YAML config on a shared trainer (Lightning Fabric: one or more GPUs,
-mixed precision, checkpoints, early stopping, MLflow and CSV logs, Optuna
-sweeps), and trained models export to ONNX for inference.
+models on them: tissue segmentation, cell detection, virtual staining,
+self-supervised pretraining of pathology foundation models, image-text models
+for zero-shot classification and retrieval, and vision-language models for
+pathology VQA. Every task runs from one YAML config on a shared trainer
+(Lightning Fabric: one or more GPUs, mixed precision, checkpoints, early
+stopping, MLflow and CSV logs, Optuna sweeps), and trained models export to ONNX (or Hugging Face safetensors for
+the image-text and vision-language models) for inference.
 
 ## Installation
 
@@ -45,7 +47,7 @@ list of extras:
 | Extra | Installs | Needed for |
 |---|---|---|
 | `detection` | rfdetr 1.11.2 (pinned), pycocotools, torch-hungarian | `pathotrain.detection` |
-| `histossl` | peft | LoRA adaptation in `pathotrain.histossl` |
+| `histossl` | peft | LoRA adaptation in `pathotrain.histossl` and `pathotrain.pathoclip` |
 | `pathogen` | diffusers | `pathotrain.pathogen` |
 | `pathovlm` | trl (pinned), peft, num2words | `pathotrain.pathovlm` |
 | `export` | onnx, onnxruntime | ONNX export of any trained model |
@@ -124,7 +126,8 @@ config.yaml`); see each module's README for its data layout and options.
 | [`detection`](src/pathotrain/detection/README.md) | Cell / object detection | [RF-DETR](https://github.com/roboflow/rf-detr) nano to large (DINOv2 backbone, DETR decoder), COCO-pretrained | `detection/config.example.yaml` |
 | [`pathogen`](src/pathotrain/pathogen/README.md) | Virtual staining (e.g. H&E to IHC) from registered tile pairs | [diffusers](https://github.com/huggingface/diffusers): latent diffusion with a frozen SD VAE and a UNet (DDPM / DDIM), or SiT with rectified flow and REPA | `pathogen/config.example.yaml` |
 | [`histossl`](src/pathotrain/histossl/README.md) | Self-supervised (continued) pretraining of pathology foundation models | DINOv2 (DINO + iBOT + KoLeo / KDE, incl. the OpenMidnight recipe), teacher-JEPA, LeJEPA; full, last-N or LoRA ([peft](https://github.com/huggingface/peft)) adaptation; linear, kNN and dense probes | `histossl/configs/*.example.yaml` |
-| [`pathovlm`](src/pathotrain/pathovlm/README.md) | VLM fine-tuning for pathology VQA (in development) | [transformers](https://github.com/huggingface/transformers) Qwen3-VL and SmolVLM2, fine-tuned with [TRL](https://github.com/huggingface/trl)'s SFTTrainer and LoRA ([peft](https://github.com/huggingface/peft)), logged like the other modules; PathVQA data | `pathovlm/configs/*.example.yaml` |
+| [`pathoclip`](src/pathotrain/pathoclip/README.md) | Image-text contrastive fine-tuning on pathology captions, for zero-shot tile classification and image-text retrieval | [transformers](https://github.com/huggingface/transformers) SigLIP 2 (base, so400m) with its sigmoid loss, LoRA ([peft](https://github.com/huggingface/peft)) or full, on one or both towers; or a frozen `pathofm` image tower (LiT) with cached embeddings; ARCH data | `pathoclip/configs/*.example.yaml` |
+| [`pathovlm`](src/pathotrain/pathovlm/README.md) | VLM fine-tuning and post-training for pathology VQA | [transformers](https://github.com/huggingface/transformers) Qwen3-VL and SmolVLM2 with LoRA ([peft](https://github.com/huggingface/peft)); [TRL](https://github.com/huggingface/trl) stages: SFT, DPO / MPO, KTO, GRPO / GSPO, RLOO, on-policy distillation, online DPO; logged like the other modules; PathVQA data | `pathovlm/configs/*.example.yaml` |
 
 ## Helper modules
 
