@@ -105,12 +105,20 @@ out. One RTX 5090.
 | A: LoRA, both towers (epoch 9 of 10) | 0.055 / 0.283 | 0.068 / 0.327 | 0.189 | 0.307 | 0.299 |
 | B: LoRA, text tower only (epoch 8 of 10) | 0.038 / 0.189 | 0.040 / 0.235 | 0.128 | 0.275 | 0.283 |
 | C: frozen Midnight-12k + projection, LoRA text tower (epoch 30 of 60) | **0.119 / 0.371** | **0.147 / 0.430** | **0.279** | 0.305 | 0.371 |
+| C, 15 epochs (epoch 13 of 15) | 0.068 / 0.314 | 0.084 / 0.412 | 0.229 | 0.408 | **0.459** |
 
 | Arm | Config | lr / batch / epochs | Time | Peak GPU memory |
 |---|---|---|---|---|
 | A | `configs/siglip2-base.example.yaml` | 1e-4 / 64 / 10 | 9.5 min | 8.4 GB |
 | B | the same with `adaptation.towers: [text]` | 1e-4 / 64 / 10 | 10.5 min | 4.0 GB |
-| C | `configs/midnight-lit.example.yaml` | 5e-4 / 512 / 60 | 17.4 min (incl. ~1 min caching) | 18.0 GB |
+| C | `configs/midnight-lit.example.yaml` with 60 epochs, `val_every: 5` | 5e-4 / 512 / 60 | 17.4 min (incl. ~1 min caching) | 18.0 GB |
+| C, 15 epochs | `configs/midnight-lit.example.yaml` | 5e-4 / 512 / 15 | 18.1 min (CRC zero-shot every epoch) | 18.0 GB |
+
+Times are from before validation workers persisted across epochs (2026-11-04):
+each epoch restarted the validation and zero-shot loaders' workers, ~20 s each
+with forkserver. An arm A epoch now takes ~14 s instead of ~53 s (training MFU
+0.31 instead of 0.07 on an RTX 5090, `peak_tflops` 209.5); its first epoch still
+pays the one-time worker start.
 
 - Training the SigLIP 2 towers on ARCH triples retrieval (A) but costs CRC
   zero-shot accuracy, even with the image tower frozen (B): the text tower drifts
@@ -120,8 +128,12 @@ out. One RTX 5090.
   projection on ~6k pairs was not the problem it could have been.
 - C overfits after ~10-15 epochs: val loss rises 7.3 -> 14.8 while val recall
   stays at 0.25-0.26, and CRC zero-shot balanced accuracy peaked at 0.468 at
-  epoch 10 before falling to ~0.35. A shorter or regularised run is the next
-  thing to try.
+  epoch 10 before falling to ~0.35.
+- Stopped at 15 epochs, C is the only arm that beats the base model on CRC
+  zero-shot (balanced accuracy 0.459 vs 0.376, +8 points), and still retrieves
+  better than A (recall_mean 0.229 vs 0.189). The 60-epoch run retrieves best
+  (0.279) but loses the zero-shot gain: the epoch count trades one for the
+  other. The example config uses 15.
 - C's settings differ from A / B (its projection starts from random weights,
   and cached features make large batches cheap), so the arms are not a
   controlled comparison.
