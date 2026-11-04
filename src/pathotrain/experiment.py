@@ -239,8 +239,9 @@ def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
         **defaults,
         **cfg.get("loader", {}),
     }
-    if not loader.get("num_workers"):  # DataLoader refuses a context without workers
+    if not loader.get("num_workers"):  # DataLoader refuses these without workers
         loader.pop("multiprocessing_context", None)
+        loader.pop("persistent_workers", None)
     return loader
 
 

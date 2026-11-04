@@ -27,17 +27,24 @@ from pathotrain.pathoclip.task import embed_images, embed_texts
 TEMPLATE = "an H&E image of {}."
 
 
-@torch.no_grad()
-def image_embeddings(
-    model: nn.Module, dataset: Dataset, batch_size: int = 64, num_workers: int = 4
-) -> tuple[Tensor, Tensor]:
-    """L2-normalised image embeddings ``(N, D)`` float32 and labels of ``(image,
-    label)`` samples, in order, on ``model``'s device (bf16 autocast on CUDA)."""
-    device = next(model.parameters()).device
-    context = "forkserver" if num_workers else None  # fresh workers, as histossl's probe
-    loader = DataLoader(
-        dataset, batch_size=batch_size, num_workers=num_workers, multiprocessing_context=context
+def tile_loader(dataset: Dataset, batch_size: int = 64, num_workers: int = 4) -> DataLoader:
+    """``dataset`` in order. Its workers persist, so an evaluation every epoch does not
+    start them again (~20 s each time with forkserver)."""
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        # Fresh workers, as histossl's probe: forking the training process can deadlock.
+        multiprocessing_context="forkserver" if num_workers else None,
+        persistent_workers=num_workers > 0,
     )
+
+
+@torch.no_grad()
+def image_embeddings(model: nn.Module, loader: DataLoader) -> tuple[Tensor, Tensor]:
+    """L2-normalised image embeddings ``(N, D)`` float32 and labels of ``loader``'s
+    ``(image, label)`` batches, in order, on ``model``'s device (bf16 autocast on CUDA)."""
+    device = next(model.parameters()).device
     feats, labels = [], []
     for images, y in loader:
         with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
@@ -66,19 +73,21 @@ def evaluator(
     """``model -> metrics`` on ``test`` (one prompt per class, in class order),
     plus the linear probe and kNN fit on ``train`` when given."""
     n = len(prompts)
+    test_loader = tile_loader(test, batch_size, num_workers)
+    train_loader = None if train is None else tile_loader(train, batch_size, num_workers)
 
     def evaluate(model: nn.Module) -> dict[str, float]:
         was_training = model.training
         model.eval()
-        x, y = image_embeddings(model, test, batch_size, num_workers)
+        x, y = image_embeddings(model, test_loader)
         scores = (x @ text_embeddings(model, processor, prompts).T).softmax(1)
         metrics = {
             "zs/acc": multiclass_accuracy(scores, y, n, average="micro").item(),
             "zs/balanced_acc": multiclass_recall(scores, y, n, average="macro").item(),
             "zs/macro_f1": multiclass_f1_score(scores, y, n, average="macro").item(),
         }
-        if train is not None:
-            tx, ty = image_embeddings(model, train, batch_size, num_workers)
+        if train_loader is not None:
+            tx, ty = image_embeddings(model, train_loader)
             metrics |= fit_linear_probe(tx, ty, x, y, n) | knn(tx, ty, x, y, n)
         model.train(was_training)
         return metrics
