@@ -345,3 +345,28 @@ def test_qwen_distillation_rebuilds_mm_token_type_ids_from_the_tokens(monkeypatc
     trainer._image_pad_token_id = image
     got = trainer._generate_and_score_completions(None)["mm_token_type_ids"]
     assert got.tolist() == [[0, 0, 1, 1, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]]
+
+
+@pytest.mark.parametrize("base", ["GRPOTrainer", "RLOOTrainer"])
+def test_rl_trainers_rebuild_qwen_image_token_types(base, monkeypatch):
+    import trl
+
+    from pathotrain.pathovlm import stages
+
+    seen = {}
+
+    def logps(self, model, input_ids, *args, mm_token_type_ids=None, **kwargs):
+        seen["ids"] = mm_token_type_ids
+        return None, None, None
+
+    monkeypatch.setattr(getattr(trl, base), "_get_per_token_logps_and_entropies", logps)
+    trainer = object.__new__(getattr(stages, f"Qwen{base}"))
+    tokenizer = type("T", (), {"convert_tokens_to_ids": staticmethod(lambda t: 7)})
+    trainer.processing_class = type("P", (), {"tokenizer": tokenizer})
+    # Left-padded prompts + completions; the processor's ids are right-aligned per row.
+    ids = torch.tensor([[0, 0, 7, 7, 5, 3, 2], [7, 7, 7, 5, 5, 3, 0]])
+    stale = torch.tensor([[1, 1, 0, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]])
+    trainer._get_per_token_logps_and_entropies(None, ids, None, 2, mm_token_type_ids=stale)
+    assert seen["ids"].tolist() == [[0, 0, 1, 1, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]]
+    trainer._get_per_token_logps_and_entropies(None, ids, None, 2)  # no images: left as None
+    assert seen["ids"] is None

@@ -161,6 +161,32 @@ class QwenDistillationTrainer(DistillationTrainer):
         return output
 
 
+class QwenImageTokens:
+    """Mixed into GRPO / RLOO: Qwen-VL's ``mm_token_type_ids`` rebuilt from the image
+    placeholder tokens of each forward's ``input_ids``. TRL left-pads the prompts of
+    different questions to one length but keeps the processor's ids, so with more
+    than one question per batch Qwen3-VL's 3-D positions misalign and fail."""
+
+    # shortcut: works around trl 1.17.1 (tool images only are rebuilt), drop when trl fixes it
+    def _get_per_token_logps_and_entropies(
+        self, model, input_ids, *args, mm_token_type_ids=None, **kwargs
+    ):
+        if mm_token_type_ids is not None:
+            image = self.processing_class.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+            mm_token_type_ids = (input_ids == image).long()
+        return super()._get_per_token_logps_and_entropies(
+            model, input_ids, *args, mm_token_type_ids=mm_token_type_ids, **kwargs
+        )
+
+
+class QwenGRPOTrainer(QwenImageTokens, GRPOTrainer):
+    pass
+
+
+class QwenRLOOTrainer(QwenImageTokens, RLOOTrainer):
+    pass
+
+
 # Truncation would cut image tokens (up to 1024 for Qwen3-VL) or the answer.
 NO_TRUNCATION = {"max_length": None}
 
@@ -196,7 +222,7 @@ STAGES = {
     ),
     "grpo": StageSpec(
         GRPOConfig,
-        GRPOTrainer,
+        QwenGRPOTrainer,
         trainer_kwargs=lambda c, processor: {"reward_funcs": [answer_reward]},
         # GSPO (Zheng et al. 2025): sequence-level importance ratios, the paper's clipping range.
         presets={
@@ -212,7 +238,7 @@ STAGES = {
     ),
     "rloo": StageSpec(
         RLOOConfig,
-        RLOOTrainer,
+        QwenRLOOTrainer,
         trainer_kwargs=lambda c, processor: {"reward_funcs": [answer_reward]},
         build_dataset=prompts,
         val_loss=False,
