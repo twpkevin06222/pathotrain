@@ -18,8 +18,9 @@ from lightning_fabric import Fabric
 from lightning_fabric.loggers import Logger
 from loguru import logger
 from torch import nn
+from torch.utils._python_dispatch import TorchDispatchMode
 from torch.utils.data import DataLoader
-from torch.utils.flop_counter import FlopCounterMode
+from torch.utils.flop_counter import flop_registry
 
 from pathotrain.engine.task import Task
 
@@ -166,7 +167,7 @@ class Trainer:
             # Skip the gradient all-reduce on accumulation steps.
             with (
                 fabric.no_backward_sync(task.model, enabled=not last),
-                FlopCounterMode(display=False) if count else nullcontext() as flops,
+                FlopCounter() if count else nullcontext() as flops,
             ):
                 loss, logs = task.training_step(batch)
                 fabric.backward(loss / c.accumulate)
@@ -268,6 +269,28 @@ class Trainer:
             for i, cb in enumerate(self.callbacks)
             if hasattr(cb, "state_dict")
         }
+
+
+class FlopCounter(TorchDispatchMode):
+    """The FLOPs of the operators run inside it, by PyTorch's per-operator
+    formulas (``torch.utils.flop_counter``); the total of ``FlopCounterMode``
+    without its per-module breakdown, whose module tracker kept a DPO step's
+    activations alive under gradient checkpointing (11.5 GB -> out of memory at 32 GB)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.total = 0
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        out = func(*args, **kwargs)
+        count = flop_registry.get(func._overloadpacket)
+        if count is not None:
+            self.total += count(*args, **kwargs, out_val=out)
+        return out
+
+    def get_total_flops(self) -> int:
+        return self.total
 
 
 def throughput(

@@ -40,13 +40,12 @@ import numpy as np
 import torch
 from peft import LoraConfig
 from torch import nn
-from torch.utils.flop_counter import FlopCounterMode
 
 from pathotrain import experiment
 from pathotrain.dataloader.vqa import VQADataset
 from pathotrain.engine import CSVLogger, MLflowLogger, flatten, load_config
 from pathotrain.engine.logger import sqlite_store
-from pathotrain.engine.trainer import throughput
+from pathotrain.engine.trainer import FlopCounter, throughput
 from pathotrain.pathovlm.callbacks import PathotrainLogging, Provenance
 from pathotrain.pathovlm.config import MONITORS, ConfigError, VLMConfig, validate
 from pathotrain.pathovlm.eval import generate_answers
@@ -122,7 +121,7 @@ class FlopCount:
     def training_step(self, model, inputs, num_items_in_batch=None):
         if len(self._flops) >= self.COUNTED:
             return super().training_step(model, inputs, num_items_in_batch)
-        with FlopCounterMode(display=False) as counter:
+        with FlopCounter() as counter:
             loss = super().training_step(model, inputs, num_items_in_batch)
         self._flops.append(counter.get_total_flops())
         return loss

@@ -379,6 +379,23 @@ def test_fit_logs_flops_throughput_and_mfu_per_epoch(tmp_path):
     assert trainer.step_flops > 0
 
 
+def test_flop_counter_matches_torchs():
+    from torch.utils.flop_counter import FlopCounterMode
+
+    from pathotrain.engine.trainer import FlopCounter
+
+    nn = torch.nn
+    model = nn.Sequential(nn.Conv2d(3, 8, 3), nn.Flatten(), nn.LazyLinear(4))
+    x = torch.randn(2, 3, 16, 16)
+    model(x)  # materialise the lazy layer
+    totals = []
+    for mode in (FlopCounterMode(display=False), FlopCounter()):
+        with mode:
+            model(x).sum().backward()
+        totals.append(mode.get_total_flops())
+    assert totals[0] == totals[1] > 0
+
+
 def test_throughput_without_a_peak_has_no_mfu():
     from pathotrain.engine.trainer import throughput
 
