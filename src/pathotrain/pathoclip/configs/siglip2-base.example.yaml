@@ -10,6 +10,7 @@ mlflow_db: ~/project/mlflow.db                 # example
 
 model:
   name: siglip2-base-224      # or siglip2-so400m-224
+  # image: midnight-12k       # LiT: a frozen pathofm image tower + projection; needs towers: [text]
 adaptation:                   # LoRA on both towers' transformer blocks; logit scale and bias train too
   type: lora                  # or full
   rank: 16

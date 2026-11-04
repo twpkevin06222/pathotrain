@@ -185,17 +185,19 @@ def test_config_errors_are_collected(tmp_path):
         validate({**no_eval, "checkpoint": {"monitor": "zs/balanced_acc"}})
 
 
-def test_example_config_is_valid(tmp_path):
+@pytest.mark.parametrize("name", ["siglip2-base", "midnight-lit"])
+def test_example_config_is_valid(tmp_path, name):
     from importlib.resources import files
 
-    from pathotrain.engine import load_config
+    from pathotrain.engine import TrainerConfig, load_config
 
-    cfg = load_config(files("pathotrain.pathoclip") / "configs" / "siglip2-base.example.yaml")
+    cfg = load_config(files("pathotrain.pathoclip") / "configs" / f"{name}.example.yaml")
     data = {"train": _captions(tmp_path / "t.jsonl", 2), "val": _captions(tmp_path / "v.jsonl", 2)}
     parsed = validate(
         {**cfg, "data": data, "eval": {**cfg["eval"], "test": _tiles(tmp_path / "x")}}
     )
     assert parsed.model.name in CLIPS and set(parsed.eval.prompts) >= {"TUM", "STR"}
+    TrainerConfig(**cfg["trainer"])
 
 
 def test_arch_export_keeps_a_figures_panels_in_one_split(tmp_path):
@@ -246,3 +248,51 @@ def test_text_only_adaptation_keeps_the_image_tower(tmp_path, kind, monkeypatch)
     assert ckpt["provenance"]["adaptation"]["towers"] == ["text"]
     with pytest.raises(ConfigError, match="adaptation.towers"):
         validate({**cfg, "adaptation": {"towers": ["audio"]}})
+
+
+def test_locked_image_tower_trains_text_and_projection_on_cached_features(tmp_path, monkeypatch):
+    from transformers import Dinov2Config, Dinov2Model
+
+    from pathotrain.pathoclip import models as clip_models
+
+    model, processor = _tiny_siglip()
+    monkeypatch.setattr(clip_train, "load_clip", lambda name: (model, processor))
+    torch.manual_seed(0)
+    small = {"hidden_size": 32, "intermediate_size": 64, "num_hidden_layers": 1}
+    backbone = Dinov2Model(Dinov2Config(**small, num_attention_heads=2, patch_size=14))
+    frozen = {k: v.clone() for k, v in backbone.state_dict().items()}
+    monkeypatch.setattr(clip_models, "load_backbone", lambda name: backbone)
+    cfg = _cfg(tmp_path)
+    cfg["model"] = {"name": "siglip2-base-224", "image": "midnight-12k"}
+    cfg["adaptation"] = {**cfg["adaptation"], "towers": ["text"]}
+
+    clip_train.train(cfg)
+
+    run = tmp_path / "run"
+    assert torch.load(run / "image_features_train.pt").shape == (8, 64)  # CLS + mean patch
+    with open(run / "logs/version_0/metrics.csv", newline="") as f:
+        assert {"val/recall_mean", "zs/balanced_acc"} <= set(csv.DictReader(f).fieldnames)
+    assert all(torch.equal(frozen[k], v) for k, v in backbone.state_dict().items())
+    ckpt = torch.load(run / "checkpoints/best.ckpt", weights_only=True)
+    keys = ckpt["model"].keys()
+    assert "proj.weight" in keys and any("text_model" in k and "lora_A" in k for k in keys)
+    assert not any(k.startswith("image.") or "vision_model" in k for k in keys)
+    assert ckpt["provenance"]["image"]["base"].startswith("kaiko-ai/midnight@")
+    assert ckpt["provenance"]["normalisation"]["mean"] == [0.5, 0.5, 0.5]
+
+    # Reloaded, it embeds raw pixels as the cache + projection did, and eval scores it.
+    model, _ = _tiny_siglip()
+    trained, _, _ = clip_train.load_model(run / "checkpoints/best.ckpt")
+    assert torch.equal(trained.proj.weight, ckpt["model"]["proj.weight"])
+    pixels = torch.randn(2, 3, 224, 224)
+    with torch.no_grad():
+        a = trained.get_image_features(pixel_values=pixels).pooler_output
+        b = trained.proj(trained.backbone_features(pixels))
+    assert torch.allclose(a, b)
+    best = str(run / "checkpoints/best.ckpt")
+    args = ["--captions", cfg["data"]["val"], "--test", cfg["eval"]["test"], "--num-workers", "0"]
+    clip_eval.main([best, *args])
+    with pytest.raises(ValueError, match="model.image"):
+        clip_export.export(best, tmp_path / "exported")
+    with pytest.raises(ConfigError, match=r"adaptation.towers to \[text\]"):
+        validate({**cfg, "adaptation": {"towers": ["vision", "text"]}})
