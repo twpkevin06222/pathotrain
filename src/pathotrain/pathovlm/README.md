@@ -317,8 +317,7 @@ questions sampled, 40 steps of batch 8, 2026-11-03): sampling ~100 s per 1,024
 questions, DPO 1.3 s/step and 10.0 GB peak, KTO 1.0 s/step and 9.4 GB. **The
 SFT model has learned PathVQA train:** only 12 of 504 closed train questions got
 a wrong sample (13 of 127 on val), against 280 of 520 open ones, so pairs from
-train are almost all open questions. Full DPO / KTO runs and their test scores
-are not done yet.
+train are almost all open questions. Full runs: [Post-training results](#post-training-results-on-pathvqa).
 
 ### RL stages (GRPO, GSPO, RLOO)
 
@@ -342,13 +341,17 @@ Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, batch 8 = one question x
 | grpo, gspo | ~1.9 | 8.4 GB | 80% |
 | rloo | ~2.0-2.3 | 8.4 GB | 0-40% |
 
+- With more than one question per batch, TRL 1.17.1 left-pads the prompts but
+  keeps the processor's `mm_token_type_ids`, so Qwen3-VL's image positions
+  misalign and the forward fails; `QwenGRPOTrainer` / `QwenRLOOTrainer`
+  rebuild them from the image tokens (as `QwenDistillationTrainer` does).
 - One question per step makes an epoch of PathVQA train ~19,700 steps (~10 h
   at this speed); set `stage.args.max_steps` or `trainer.epochs` below 1.
 - Most groups give no gradient: the SFT model already answers most training
   questions the same way 8 times out of 8, and a group whose answers all score
   the same has zero advantage. Expect gains, if any, on open answers.
 - Answers are ~3 tokens, so generation is short; vLLM is not used.
-- No full run or test score yet.
+- Full runs: [Post-training results](#post-training-results-on-pathvqa).
 
 ### Distillation
 
@@ -370,7 +373,7 @@ rebuilt from the image tokens, as GRPO does.
 Smoke run (`qwen3-vl-4b` seed-0 final teacher, `qwen3-vl-2b` SFT final student,
 batch 8 = 8 questions per step, 30 steps, 2026-11-03): ~2.4 s/step, 18.0 GB peak;
 an epoch of PathVQA train is ~2,460 steps (~1.7 h). Loss went from 1.05 to ~0.3-0.7.
-No full run or test score yet.
+Full run: [Post-training results](#post-training-results-on-pathvqa).
 
 ### Online DPO
 
@@ -388,7 +391,66 @@ Smoke run (`qwen3-vl-2b` from its SFT final checkpoint, batch 8 = 8 questions x
 evaluations, **25.8 GB peak** (full-vocabulary log-probabilities over every
 sequence, for the policy and the reference); an epoch of PathVQA train is
 ~2,460 steps (~3.3 h). Reward accuracy rose from 0.03 to 0.23; the KL to the
-parent was noisy (2-28). No full run or test score yet.
+parent was noisy (2-28). Full run: [Post-training results](#post-training-results-on-pathvqa).
+
+### Post-training results on PathVQA
+
+Every stage from the `qwen3-vl-2b` seed-0 SFT final checkpoint (step 7371), one
+epoch, LoRA rank 16 as for SFT, seed 0, no hyperparameter search
+(2026-11-04, one RTX 5090). The SFT model has memorised PathVQA train, so the
+stages train on PathVQA **validation** instead, split by image (no image in
+both): 5,173 questions to train on and 1,086 held out (552 closed) for
+`val/*` and checkpoint choice. Test (6,719 questions) is untouched. DPO and
+KTO use 4 answers per question sampled from the SFT model (`sample`, ~6.6 min
+for the 5,173): 275 of 2,573 closed and 2,027 of 2,600 open questions had a
+wrong sample, against 12 of 504 closed on train. "best" is the checkpoint
+with the highest `val/closed_acc`, "end" the last one.
+
+| Stage | lr / batch | Checkpoint | closed_acc | open_em | open_f1 |
+|---|---|---|---|---|---|
+| SFT (the parent) | | step 7371 | 0.918 | 0.326 | 0.369 |
+| `dpo` | 2e-5 / 8 pairs | best (step 100) | 0.922 | 0.311 | 0.353 |
+| | | end (step 658) | 0.672 | 0.081 | 0.115 |
+| `kto` | 2e-5 / 8 | best (step 100) | 0.919 | 0.321 | 0.367 |
+| | | end (step 1093) | 0.919 | 0.127 | 0.137 |
+| `distill` (4B seed-0 final teacher) | 5e-5 / 8 | best (step 450) | 0.917 | 0.330 | 0.376 |
+| | | end (step 646) | 0.916 | **0.333** | **0.379** |
+| `online_dpo` | 2e-5 / 8 | best (step 150) | 0.920 | 0.329 | 0.372 |
+| | | end (step 647) | **0.924** | 0.326 | 0.372 |
+| `grpo` | 1e-5 / 2 x 8 | best (step 1000) | 0.922 | 0.319 | 0.365 |
+| | | end (step 2586) | 0.923 | 0.318 | 0.365 |
+| `grpo`, `preset: gspo` | 1e-5 / 2 x 8 | best (step 1500) | 0.916 | 0.318 | 0.364 |
+| | | end (step 2586) | 0.918 | 0.319 | 0.367 |
+| `rloo` | 1e-5 / 2 x 8 | best = end (step 2586) | 0.923 | 0.329 | 0.373 |
+
+| Stage | Time | Peak GPU memory |
+|---|---|---|
+| `dpo` | 34.5 min | 13.6 GB |
+| `kto` | 63 min | 11.0 GB |
+| `distill` | 20 min | 20.3 GB |
+| `online_dpo` | 53 min | 28.3 GB |
+| `grpo` / `gspo` | 82 min each | 12.9 GB |
+| `rloo` | 115 min | 12.9 GB |
+
+- **No stage clearly beats SFT.** Every checkpoint that did not degrade is
+  within 0.6 points of SFT on closed accuracy and 0.8 on open EM (DPO's best:
+  -1.5 open EM), about the seed-to-seed spread of the SFT runs (~1 point). The 4B
+  teacher (0.933 / 0.353) stays ahead of every 2B student.
+- **Offline DPO and KTO degrade at lr 2e-5.** Both peak at step 100 on val and
+  fall after. DPO collapses on both question types (val closed 0.923 -> 0.617):
+  on held-out val the gold answers' log-probability (-20.4) ends below the
+  rejected samples' (-16.4), so the chosen answers are pushed down too. KTO
+  keeps closed accuracy but its open answers turn into long, repeated text up
+  to the 32-token limit ("microscopy" -> "an anaplastic anastomosing antral
+  sub-arch of an antral antral ..."): nearly all undesirable samples are short
+  wrong open answers, and nothing anchors the length. Untried: a lower lr, DPO's
+  `preset: mpo` (adds an SFT loss on the gold answer).
+- **The on-policy stages are stable but flat.** Distillation, online DPO, GRPO,
+  GSPO and RLOO hold val and test at the SFT level from start to end.
+  RLOO is the only one whose val open EM rose (0.328 -> 0.335); its test gain
+  is +0.5 closed and +0.3 open EM. GRPO's training reward stays noisy
+  (~0.5-0.86) with no upward trend: in most groups all 8 answers score the
+  same and give no gradient.
 
 ## Export
 
