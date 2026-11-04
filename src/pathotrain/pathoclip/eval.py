@@ -26,7 +26,7 @@ from transformers import AutoModel, AutoProcessor
 from pathotrain.dataloader.caption import CaptionDataset
 from pathotrain.pathoclip.config import Eval
 from pathotrain.pathoclip.data import CaptionCollator
-from pathotrain.pathoclip.models import CLIPS, load_clip
+from pathotrain.pathoclip.models import CLIPS, image_transform, load_clip
 from pathotrain.pathoclip.task import embed_images, embed_texts, retrieval
 from pathotrain.pathoclip.train import build_evaluator
 
@@ -46,11 +46,12 @@ def load(spec: str):
 @torch.no_grad()
 def caption_retrieval(model, processor, jsonl: str, batch_size: int, num_workers: int) -> dict:
     device = next(model.parameters()).device
+    image = getattr(model, "image_name", None)  # a LockedImageCLIP's own preprocessing
     loader = DataLoader(
         CaptionDataset(jsonl),
         batch_size=batch_size,
         num_workers=num_workers,
-        collate_fn=CaptionCollator(processor),
+        collate_fn=CaptionCollator(processor, image and image_transform(image)),
         multiprocessing_context="forkserver" if num_workers else None,
     )
     images, texts, groups = [], [], []
@@ -92,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
         e = Eval(args.test, args.train, args.root, args.template)
     if args.config or args.test:
         e = Eval(**{**e.__dict__, "batch_size": args.batch_size, "num_workers": args.num_workers})
-        metrics |= build_evaluator(e, processor)(model)
+        metrics |= build_evaluator(e, processor, getattr(model, "image_name", None))(model)
     print(json.dumps(metrics, indent=2))
 
 

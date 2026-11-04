@@ -1,5 +1,9 @@
 # pathotrain
 
+<p align="center">
+  <img src="figures/pathotrain_banner.png" alt="pathotrain: pathology model training on whole-slide tiles" width="100%">
+</p>
+
 > [!WARNING]
 > For research use only. Not a medical device.
 

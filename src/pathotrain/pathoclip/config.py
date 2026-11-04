@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from pathotrain.pathoclip.models import CLIPS
+from pathotrain.pathofm import FOUNDATION_MODELS
 
 ADAPTATIONS = ("lora", "full")
 # Linear layers of both towers' transformer blocks.
@@ -25,6 +26,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class Model:
     name: str
+    image: str | None = None  # a frozen pathofm image tower (LiT); name gives the text tower
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,13 @@ def validate(cfg: dict) -> CLIPConfig:
 
     if model is not None and model.name not in CLIPS:
         errors.append(f"model.name must be one of {sorted(CLIPS)}, got {model.name!r}")
+    if model is not None and model.image is not None:
+        if model.image not in FOUNDATION_MODELS:
+            errors.append(
+                f"model.image must be one of {sorted(FOUNDATION_MODELS)}, got {model.image!r}"
+            )
+        if adaptation is not None and tuple(adaptation.towers) != ("text",):
+            errors.append("model.image is frozen: set adaptation.towers to [text]")
     if adaptation is not None:
         if adaptation.type not in ADAPTATIONS:
             errors.append(f"adaptation.type must be one of {ADAPTATIONS}, got {adaptation.type!r}")

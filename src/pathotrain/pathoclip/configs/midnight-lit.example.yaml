@@ -1,0 +1,58 @@
+# Experiment config for `python -m pathotrain.pathoclip.train config.yaml`.
+# LiT (locked-image tuning): a frozen Midnight-12k image tower with a trained
+# projection, and LoRA on SigLIP 2 base's text tower, on ARCH captions, scored
+# zero-shot on CRC-VAL-HE-7K. Midnight embeds every train / val image once into
+# <output_dir>/image_features_*.pt, so training runs the text side only and takes
+# large batches. Values are those of the README's arm C run; copy it and set the
+# paths. Defaults unless marked "example".
+
+name: pathoclip_midnight_lit_01   # example
+seed: 0
+output_dir: runs/pathoclip_midnight_lit_01   # example
+mlflow_db: ~/project/mlflow.db                 # example
+
+model:
+  name: siglip2-base-224      # the text tower (and logit scale / bias)
+  image: midnight-12k         # frozen image tower: any pathotrain.pathofm model
+adaptation:                   # LoRA on the text tower's blocks; the projection trains in full
+  type: lora                  # or full
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_proj, k_proj, v_proj, out_proj]   # or any of these and fc1, fc2
+  towers: [text]              # required with model.image
+
+data:                         # pathotrain.dataloader.caption JSONL; `python -m pathotrain.dataloader.caption arch ...`
+  train: ~/data/arch/train.jsonl   # example
+  val: ~/data/arch/val.jsonl       # example
+eval:                         # zero-shot classification at each validation (and a linear probe with `train`)
+  test: ~/data/crc_he_100k/CRC-VAL-HE-7K   # example; class folders or a path,label CSV
+  train: null                 # e.g. a path,label CSV of a few thousand NCT-CRC-HE-100K tiles
+  template: an H&E image of {}.
+  prompts:                    # example: class folder -> its prompt, over the template
+    ADI: an H&E image of adipose tissue.
+    BACK: an H&E image of background.
+    DEB: an H&E image of debris.
+    LYM: an H&E image of lymphocytes.
+    MUC: an H&E image of mucus.
+    MUS: an H&E image of smooth muscle.
+    NORM: an H&E image of normal colon mucosa.
+    STR: an H&E image of cancer-associated stroma.
+    TUM: an H&E image of colorectal adenocarcinoma epithelium.
+  batch_size: 64
+  num_workers: 4
+
+task:
+  lr: 5.0e-4                  # example; the projection starts from random weights
+  weight_decay: 0.0
+  warmup_epochs: 3            # example
+trainer:
+  max_epochs: 60              # example; it overfits after ~10-15 epochs (README)
+  val_every: 5                # example; CRC zero-shot runs Midnight over 7k tiles
+  precision: bf16-mixed
+  peak_tflops: null           # the GPU's dense bf16 peak (spec sheet), for system/mfu
+loader:
+  batch_size: 512             # example; cached features: in-batch negatives are cheap
+  num_workers: 8              # example
+checkpoint:
+  monitor: val/recall_mean    # example; keeps CRC held out (default zs/balanced_acc with eval)

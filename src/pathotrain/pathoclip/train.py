@@ -10,7 +10,7 @@ checkpoints with its provenance, as for every pathotrain run. Sections (``?``
 marks optional ones)::
 
     name, seed, output_dir, mlflow_db?
-    model: {name: siglip2-base-224}
+    model: {name: siglip2-base-224, image?: midnight-12k}  # image: a frozen pathofm tower (LiT)
     adaptation?: {type: lora, rank: 16, alpha: 32, dropout: 0.05, targets: [q_proj, ...],
                   towers: [vision, text]}  # or type: full; towers: [text] freezes the image tower
     data: {train: arch/train.jsonl, val: arch/val.jsonl, root?: null}  # pathotrain.dataloader.caption
@@ -19,6 +19,13 @@ marks optional ones)::
     trainer?, loader?, checkpoint?, early_stopping?   # as for pathotrain (loader batch_size: 64)
 
 ``best.ckpt`` follows ``zs/balanced_acc`` with ``eval``, else ``val/recall_mean``.
+
+With ``model.image`` (a :data:`~pathotrain.pathofm.FOUNDATION_MODELS` name and
+``adaptation.towers: [text]``), the image tower is that frozen backbone and a
+trained projection (:class:`~.models.LockedImageCLIP`): its embedding of every
+train and val image is computed once into ``<output_dir>/image_features_*.pt``,
+so training runs the text tower only and takes large batches. Images get no
+augmentation either way.
 """
 
 import argparse
@@ -26,7 +33,8 @@ from importlib.metadata import version
 from pathlib import Path
 
 import torch
-from torch import nn
+from torch import Tensor, nn
+from torch.utils.data import DataLoader
 
 from pathotrain import experiment
 from pathotrain.dataloader import ClassTileDataset
@@ -34,10 +42,17 @@ from pathotrain.dataloader.caption import CaptionDataset
 from pathotrain.engine import load_config, load_trainable_state
 from pathotrain.histossl.eval.linear_probe import probe_transform
 from pathotrain.pathoclip.config import TOWERS, Adaptation, CLIPConfig, Eval, adaptation, validate
-from pathotrain.pathoclip.data import CaptionCollator
-from pathotrain.pathoclip.models import CLIPS, TEXT_LENGTH, load_clip
+from pathotrain.pathoclip.data import CaptionCollator, EmbeddedCaptions
+from pathotrain.pathoclip.models import (
+    CLIPS,
+    TEXT_LENGTH,
+    LockedImageCLIP,
+    image_transform,
+    load_clip,
+)
 from pathotrain.pathoclip.task import ContrastiveTask
 from pathotrain.pathoclip.zero_shot import evaluator
+from pathotrain.pathofm import FOUNDATION_MODELS
 
 
 def adapt(model: nn.Module, a: Adaptation) -> nn.Module:
@@ -68,6 +83,42 @@ def adapt(model: nn.Module, a: Adaptation) -> nn.Module:
     return model
 
 
+def build_model(name: str, image: str | None, a: Adaptation) -> tuple[nn.Module, object]:
+    """The adapted model a config's ``model`` and ``adaptation`` describe, and its processor."""
+    model, processor = load_clip(name)
+    model = adapt(model, a)
+    return (LockedImageCLIP(image, model) if image else model), processor
+
+
+@torch.no_grad()
+def cache_image_features(
+    model: LockedImageCLIP, captions: CaptionDataset, processor, path: Path, num_workers: int
+) -> Tensor:
+    """``model``'s backbone embedding of each of ``captions``' images ``(N, D)``
+    float32 on the CPU, computed once into ``path``."""
+    if path.is_file():
+        features = torch.load(path, weights_only=True)
+        # shortcut: the cache is checked by row count only; delete it if the images change.
+        if len(features) == len(captions):
+            return features
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.image.to(device)
+    loader = DataLoader(
+        captions,
+        batch_size=64,
+        num_workers=num_workers,
+        collate_fn=CaptionCollator(processor, image_transform(model.image_name)),
+        multiprocessing_context="forkserver" if num_workers else None,
+    )
+    features = []
+    for batch in loader:
+        with torch.autocast(device, torch.bfloat16, enabled=device == "cuda"):
+            features.append(model.backbone_features(batch["pixel_values"].to(device)).cpu())
+    features = torch.cat(features)
+    torch.save(features, path)
+    return features
+
+
 def _tiles(e: Eval, spec: str, transform, class_names=None) -> ClassTileDataset:
     spec, root = Path(spec).expanduser(), e.root and Path(e.root).expanduser()
     if spec.suffix.lower() == ".csv":
@@ -75,10 +126,14 @@ def _tiles(e: Eval, spec: str, transform, class_names=None) -> ClassTileDataset:
     return ClassTileDataset(spec, transform, class_names=class_names)
 
 
-def build_evaluator(e: Eval, processor):
-    """The zero-shot (and linear probe) evaluator ``eval`` describes."""
+def build_evaluator(e: Eval, processor, image: str | None = None):
+    """The zero-shot (and linear probe) evaluator ``eval`` describes, for a
+    model whose image tower is ``image`` (a pathofm name) or the processor's."""
     ip = processor.image_processor
-    transform = probe_transform(ip.image_mean, ip.image_std, ip.size["height"])
+    if image:
+        transform = image_transform(image)
+    else:
+        transform = probe_transform(ip.image_mean, ip.image_std, ip.size["height"])
     train = _tiles(e, e.train, transform) if e.train else None
     test = _tiles(e, e.test, transform, train.class_names if train else None)
     prompts = [e.prompts.get(name, e.template.format(name)) for name in test.class_names]
@@ -88,7 +143,7 @@ def build_evaluator(e: Eval, processor):
 def provenance(c: CLIPConfig, processor) -> dict:
     """What a checkpoint must say about its weights besides the config."""
     clip, a, ip = CLIPS[c.model.name], c.adaptation, processor.image_processor
-    return {
+    out = {
         "model": c.model.name,
         "base": f"{clip.repo}@{clip.revision}",
         "adaptation": {"type": a.type}
@@ -104,29 +159,46 @@ def provenance(c: CLIPConfig, processor) -> dict:
         "git_commit": experiment.git_commit(),
         "pathotrain_version": version("pathotrain"),
     }
+    if c.model.image:  # the image side is the frozen backbone, not SigLIP's tower
+        fm = FOUNDATION_MODELS[c.model.image]
+        out["image"] = {"model": c.model.image, "base": f"{fm.repo_id}@{fm.revision}"}
+        out["normalisation"] = {"mean": list(fm.mean), "std": list(fm.std)}
+    return out
 
 
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the fine-tuning ``cfg`` describes and return the last validation metrics."""
     c = validate(cfg)
     config_path = experiment.start(cfg, resume)
-    model, processor = load_clip(c.model.name)
-    model = adapt(model, c.adaptation)
+    model, processor = build_model(c.model.name, c.model.image, c.adaptation)
+    train_set = CaptionDataset(c.data.train, c.data.root)
+    val_set = CaptionDataset(c.data.val, c.data.root)
+    if c.model.image:
+        workers = cfg.get("loader", {}).get("num_workers", 0)
+        out = config_path.parent
+        train_features = cache_image_features(
+            model, train_set, processor, out / "image_features_train.pt", workers
+        )
+        val_features = cache_image_features(
+            model, val_set, processor, out / "image_features_val.pt", workers
+        )
+        train_set = EmbeddedCaptions(train_set, train_features)
+        val_set = EmbeddedCaptions(val_set, val_features)
     t = c.task
     task = ContrastiveTask(
         model,
         t.lr,
         t.weight_decay,
         t.warmup_epochs,
-        evaluators=[build_evaluator(c.eval, processor)] if c.eval else [],
-        trainable_only=c.adaptation.type == "lora",
+        evaluators=[build_evaluator(c.eval, processor, c.model.image)] if c.eval else [],
+        trainable_only=c.adaptation.type == "lora" or c.model.image is not None,
     )
     monitor = "zs/balanced_acc" if c.eval else "val/recall_mean"
     return experiment.fit(
         cfg,
         task,
-        CaptionDataset(c.data.train, c.data.root),
-        CaptionDataset(c.data.val, c.data.root),
+        train_set,
+        val_set,
         config_path,
         resume,
         monitor=monitor,
@@ -140,15 +212,15 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
 def load_model(path: str | Path) -> tuple[nn.Module, object, dict]:
     """The model of a ``best.ckpt`` / ``last.ckpt`` written by :func:`train` with
     its trained weights (LoRA still separate), in eval mode, with its processor
-    and config."""
+    and config: a :class:`~.models.LockedImageCLIP` for a ``model.image`` run."""
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if "config" not in ckpt:
         raise ValueError(f"{path} has no config; it was not written by pathotrain.pathoclip.train")
     cfg = ckpt["config"]
     a = adaptation(cfg.get("adaptation", {}))
-    model, processor = load_clip(cfg["model"]["name"])
-    model = adapt(model, a)
-    if a.type == "lora":  # checkpoints hold the trainable weights only
+    image = cfg["model"].get("image")
+    model, processor = build_model(cfg["model"]["name"], image, a)
+    if a.type == "lora" or image:  # checkpoints hold the trainable weights only
         load_trainable_state(model, ckpt["model"])
     else:
         model.load_state_dict(ckpt["model"])

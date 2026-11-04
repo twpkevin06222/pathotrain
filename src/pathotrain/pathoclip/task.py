@@ -55,8 +55,9 @@ def retrieval(images: Tensor, texts: Tensor, groups: Tensor) -> dict[str, float]
 
 
 class ContrastiveTask(Task):
-    """``model`` (a SigLIP model, optionally LoRA-wrapped) trained on batches of
-    ``pixel_values``, ``input_ids`` and ``groups`` (:class:`~.data.CaptionCollator`).
+    """``model`` (a SigLIP model, optionally LoRA-wrapped, or a
+    :class:`~.models.LockedImageCLIP`) trained on batches of ``pixel_values`` (or
+    ``image_features``), ``input_ids`` and ``groups`` (:class:`~.data.CaptionCollator`).
     Each of ``evaluators`` maps the model to extra metrics, run every validation."""
 
     def __init__(
@@ -75,7 +76,7 @@ class ContrastiveTask(Task):
         self._val: list[tuple[Tensor, Tensor, Tensor, Tensor]] = []
 
     def _forward(self, batch):
-        out = self.model(pixel_values=batch["pixel_values"], input_ids=batch["input_ids"])
+        out = self.model(**{k: v for k, v in batch.items() if k != "groups"})
         return out, sigmoid_loss(out.logits_per_text.float(), batch["groups"])
 
     def training_step(self, batch) -> tuple[Tensor, dict[str, Tensor]]:

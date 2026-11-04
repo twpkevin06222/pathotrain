@@ -56,6 +56,17 @@ python -m pathotrain.pathoclip.train config.yaml --resume runs/<name>/checkpoint
   towers' blocks; `fc1` / `fc2` optional) with the logit scale and bias
   trained, or `full` fine-tuning. LoRA checkpoints keep only the trained
   weights.
+- **Frozen pathology image tower (LiT, Zhai et al. 2022):** `model.image:
+  midnight-12k` (any `pathofm` model) with `adaptation.towers: [text]`. The image
+  embedding is the backbone's CLS + mean patch token through a trained linear
+  projection to SigLIP's text width; SigLIP's own image tower is unused. Images
+  are squashed to 224 x 224 and normalised as the backbone expects (Midnight:
+  mean = std = 0.5), for captions and zero-shot tiles alike. The backbone embeds
+  every train and val image once into `<output_dir>/image_features_{train,val}.pt`
+  (reused on resume; delete them if the images change), so training runs the text
+  tower only and batches of 512+ fit; no image augmentation. Checkpoints keep
+  the trained weights only. `export` refuses these checkpoints: score the `.ckpt`
+  with `eval`.
 - **Validation** every epoch, on `data.val`: `val/loss`, `val/i2t_r1/5/10`,
   `val/t2i_r1/5/10` and `val/recall_mean`; with `eval`, zero-shot
   classification of labelled tiles (`zs/acc`, `zs/balanced_acc`, `zs/macro_f1`),
@@ -80,21 +91,40 @@ export; it uses `eval.template` only (no per-class prompts). `export` writes the
 model with LoRA merged, its processor and `pathotrain.json`; it loads with
 transformers alone (`AutoModel`, `AutoProcessor`).
 
-## First numbers (2026-11-03)
+## Results (2026-11-04)
 
-ARCH `pubmed_set` only (the `books_set` download was not finished): 2,663
-train, 332 val, 314 test pairs from `export_arch`'s split. Zero-shot on
-CRC-VAL-HE-7K (9 classes) with the example config's prompts.
+Full ARCH (`books_set` + `pubmed_set`, `export_arch`'s split): 6,087 train, 746
+val and 746 test images (657 test captions). Zero-shot on CRC-VAL-HE-7K (7,180
+tiles, 9 classes) with the example configs' prompts. Seed 0, no hyperparameter
+search; `best.ckpt` chosen by `val/recall_mean` on ARCH val, so CRC stays held
+out. One RTX 5090.
 
-| Model | ARCH test i2t R@1 / R@10 | t2i R@1 / R@10 | CRC zs acc | CRC zs balanced acc |
+| Model | ARCH test i2t R@1 / R@10 | t2i R@1 / R@10 | recall_mean | CRC zs acc | CRC zs balanced acc |
+|---|---|---|---|---|---|
+| `siglip2-base-224` zero-shot | 0.021 / 0.090 | 0.025 / 0.091 | 0.058 | 0.451 | 0.376 |
+| A: LoRA, both towers (epoch 9 of 10) | 0.055 / 0.283 | 0.068 / 0.327 | 0.189 | 0.307 | 0.299 |
+| B: LoRA, text tower only (epoch 8 of 10) | 0.038 / 0.189 | 0.040 / 0.235 | 0.128 | 0.275 | 0.283 |
+| C: frozen Midnight-12k + projection, LoRA text tower (epoch 30 of 60) | **0.119 / 0.371** | **0.147 / 0.430** | **0.279** | 0.305 | 0.371 |
+
+| Arm | Config | lr / batch / epochs | Time | Peak GPU memory |
 |---|---|---|---|---|
-| `siglip2-base-224` zero-shot | 0.025 / 0.140 | 0.032 / 0.153 | 0.451 | 0.376 |
+| A | `configs/siglip2-base.example.yaml` | 1e-4 / 64 / 10 | 9.5 min | 8.4 GB |
+| B | the same with `adaptation.towers: [text]` | 1e-4 / 64 / 10 | 10.5 min | 4.0 GB |
+| C | `configs/midnight-lit.example.yaml` | 5e-4 / 512 / 60 | 17.4 min (incl. ~1 min caching) | 18.0 GB |
 
-Smoke run (example config, LoRA rank 16, batch 64, 2 epochs, RTX 5090): 141 s,
-8.3 GB peak, a 9.5 MB `best.ckpt`. On ARCH val, `val/recall_mean` went from 0.090
-to 0.100 and `val/loss` from 5.20 to 5.04. CRC zero-shot balanced accuracy stayed
-flat (0.374). Two epochs on 2.7k pairs is a check that the run works, not a
-result: no full run, no test score of a fine-tuned model yet.
+- Training the SigLIP 2 towers on ARCH triples retrieval (A) but costs CRC
+  zero-shot accuracy, even with the image tower frozen (B): the text tower drifts
+  toward ARCH's caption style.
+- C, a frozen Midnight-12k image tower (LiT), retrieves best (recall_mean x1.5 A)
+  and keeps CRC zero-shot at the base model's level. Alignment from a random
+  projection on ~6k pairs was not the problem it could have been.
+- C overfits after ~10-15 epochs: val loss rises 7.3 -> 14.8 while val recall
+  stays at 0.25-0.26, and CRC zero-shot balanced accuracy peaked at 0.468 at
+  epoch 10 before falling to ~0.35. A shorter or regularised run is the next
+  thing to try.
+- C's settings differ from A / B (its projection starts from random weights,
+  and cached features make large batches cheap), so the arms are not a
+  controlled comparison.
 
 ## Tests
 
@@ -105,4 +135,6 @@ uv run pytest packages/pathotrain/tests/test_pathoclip.py
 On a tiny random SigLIP with the real SigLIP 2 processor (from the Hugging Face
 cache, else skipped): retrieval with shared captions, the loss against
 transformers', a LoRA run end to end (metrics, checkpoint contents, MLflow),
-reload, export equal to the checkpoint, and the eval CLI on the export.
+reload, export equal to the checkpoint, and the eval CLI on the export; a frozen
+image tower run (a tiny DINOv2 in place of Midnight) end to end with its cached
+features; both example configs valid.

@@ -28,6 +28,9 @@ from pathotrain.pathoclip.train import load_model
 def export(checkpoint: str | Path, out_dir: str | Path) -> Path:
     """Write ``checkpoint``'s model and processor to the folder ``out_dir``; return it."""
     model, processor, cfg = load_model(checkpoint)
+    if cfg["model"].get("image"):
+        # shortcut: no plain Hugging Face class holds a pathofm image tower; score the .ckpt.
+        raise ValueError(f"{checkpoint} has a model.image tower: use pathoclip.eval on the .ckpt")
     # mmap: only the small entries are read; load_model already holds the weights.
     ckpt = torch.load(checkpoint, map_location="cpu", mmap=True, weights_only=True)
     metadata = {
