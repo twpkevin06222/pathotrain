@@ -206,6 +206,9 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         checkpoint_extra={"provenance": provenance(c, processor)},
         collate_fn=CaptionCollator(processor),
         batch_size=64,
+        # Validation workers persist too: starting them every epoch took ~20 s of a ~50 s
+        # epoch (forkserver); ARCH's workers hold little RAM.
+        persistent_workers=True,
     )
 
 
