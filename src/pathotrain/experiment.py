@@ -128,17 +128,17 @@ def fit(
     num_samples=n)`` for epochs of ``n`` tiles.
     """
     out = Path(cfg["output_dir"])
+    store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
+    mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
+    mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
+    # The run id goes into the checkpoints, so export can record it in the model card.
+    extra = {**(checkpoint_extra or {}), "mlflow_run_id": mlflow_logger.run_id}
     checkpoint = {"monitor": monitor, "mode": mode, **cfg.get("checkpoint", {})}
-    callbacks = [
-        ModelCheckpoint(out / "checkpoints", config=cfg, extra=checkpoint_extra, **checkpoint)
-    ]
+    callbacks = [ModelCheckpoint(out / "checkpoints", config=cfg, extra=extra, **checkpoint)]
     if "early_stopping" in cfg:
         callbacks.append(
             EarlyStopping(**{"monitor": monitor, "mode": mode, **cfg["early_stopping"]})
         )
-    store = sqlite_store(cfg["mlflow_db"]) if "mlflow_db" in cfg else {}
-    mlflow_logger = MLflowLogger(experiment=cfg["name"], **store)
-    mlflow_logger.log_artifact(config_path)  # starts the run that fit() logs to
     trainer = Trainer(
         TrainerConfig(**{**(trainer_defaults or {}), **cfg.get("trainer", {})}),
         callbacks=callbacks,
@@ -276,6 +276,154 @@ def onnx_metadata(cfg: dict, task: str, size: int, outputs: dict[str, str]) -> d
     }
 
 
+# Matplotlib's tab20, the default class colours of pathoinfer cards (in class order).
+TAB20 = [
+    (31, 119, 180),
+    (174, 199, 232),
+    (255, 127, 14),
+    (255, 187, 120),
+    (44, 160, 44),
+    (152, 223, 138),
+    (214, 39, 40),
+    (255, 152, 150),
+    (148, 103, 189),
+    (197, 176, 213),
+    (140, 86, 75),
+    (196, 156, 148),
+    (227, 119, 194),
+    (247, 182, 210),
+    (127, 127, 127),
+    (199, 199, 199),
+    (188, 189, 34),
+    (219, 219, 141),
+    (23, 190, 207),
+    (158, 218, 229),
+]
+CARD_FILE = "model_card.json"
+
+
+def model_card(
+    cfg: dict,
+    task: str,
+    size: int,
+    file: str,
+    output: dict,
+    *,
+    mpp: float | None = None,
+    icc: bool | None = None,
+    name: str | None = None,
+    version: str = "1",
+    overlap: float = 0.25,
+    run_id: str | None = None,
+) -> dict:
+    """The pathoinfer ModelCard (schema version 1) for an exported ONNX ``file``, as JSON.
+
+    pathoinfer owns the schema (its ``docs/model_contract.md``); pathotrain writes it
+    without importing pathoinfer. ``output`` is the task's output object. ``mpp`` and
+    ``icc`` come from the training config when it tiled slides; a model trained on tile
+    folders must be given both, as nothing records them. ``overlap`` is the tile overlap
+    to infer with (``recommended_overlap``); ``run_id`` the MLflow training run.
+
+    Raises:
+        ValueError: mpp or icc unknown, a class has no name, or ``mpp`` contradicts the
+            training resolution.
+    """
+    train = cfg["data"]["train"]
+    if "slides" in train:
+        trained_mpp = TilingConfig(**train.get("tiling", {})).tile_mpp
+        if mpp is not None and mpp != trained_mpp:
+            raise ValueError(f"the model trained at {trained_mpp} mpp; got mpp={mpp}")
+        mpp = trained_mpp
+        color = cfg["data"].get("color") or {}
+        trained_icc = color.get("icc", True) if isinstance(color, dict) else color.icc
+        if icc is not None and icc != trained_icc:
+            raise ValueError(f"the model trained with icc={trained_icc}; got icc={icc}")
+        icc = trained_icc
+    if mpp is None or icc is None:
+        raise ValueError(
+            "the model trained on tile folders, which do not record their resolution or "
+            "colour handling: pass mpp (--mpp) and icc (--icc or --no-icc)"
+        )
+    if not 0 <= overlap < 1:
+        raise ValueError(f"overlap must be in [0, 1), got {overlap}")
+    mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
+    card = {
+        "schema_version": 1,
+        "name": name or cfg["name"],
+        "version": version,
+        "task": task,
+        "framework": "onnx",
+        "file": file,
+        "precision": "fp32",
+        "input": {
+            "name": "image",
+            "tile_size": size,
+            "mpp": mpp,
+            "channel_order": "RGB",
+            "layout": "NCHW",
+            "dtype": "float32",
+            "normalisation": {"mean": list(mean), "std": list(std), "scale": 1 / 255},
+            "icc": icc,
+        },
+        "classes": card_classes(cfg, task),
+        "output": output,
+        "recommended_overlap": overlap,
+        "provenance": {
+            "training_run_id": run_id,
+            "source_metadata": {"pathotrain": onnx_metadata(cfg, task, size, {})},
+        },
+    }
+    if task == "segmentation":
+        card["background_id"] = 0
+    return card
+
+
+def card_classes(cfg: dict, task: str) -> list[dict]:
+    """``{id, name, color}`` per output index. Names come from ``task.class_names``, else
+    from ``data.class_map`` (inverted; label 0 is ``background`` for segmentation);
+    colours from the top-level ``class_colors`` (by name), else tab20.
+
+    Raises:
+        ValueError: a class has no name, or ``class_colors`` names an unknown class.
+    """
+    n = cfg["model"]["num_classes"]
+    names = cfg.get("task", {}).get("class_names")
+    if not names:
+        by_label = {label: name for name, label in (cfg["data"].get("class_map") or {}).items()}
+        if task == "segmentation":
+            by_label.setdefault(0, "background")
+        missing = [i for i in range(n) if i not in by_label]
+        if missing:
+            raise ValueError(
+                f"classes {missing} have no name: set task.class_names (one per class)"
+            )
+        names = [by_label[i] for i in range(n)]
+    if len(names) != n:
+        raise ValueError(f"{len(names)} class names for {n} classes")
+    colors = cfg.get("class_colors") or {}
+    unknown = set(colors) - set(names)
+    if unknown:
+        raise ValueError(f"class_colors names unknown classes {sorted(unknown)}")
+    return [
+        {"id": i, "name": name, "color": list(colors.get(name, TAB20[i % len(TAB20)]))}
+        for i, name in enumerate(names)
+    ]
+
+
+def checkpoint_run_id(checkpoint: str | Path) -> str | None:
+    """The MLflow run id :func:`fit` stored in ``checkpoint``, if any."""
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    run_id = state.get("mlflow_run_id")
+    return str(run_id) if run_id else None
+
+
+def write_card(card: dict, onnx_path: Path) -> Path:
+    """Write ``card`` as ``model_card.json`` beside ``onnx_path``."""
+    path = onnx_path.parent / CARD_FILE
+    path.write_text(json.dumps(card, indent=2) + "\n")
+    return path
+
+
 def export_onnx(
     model: nn.Module,
     path: str | Path,
@@ -285,10 +433,12 @@ def export_onnx(
     opset: int = 17,
     atol: float = 1e-3,
     inputs: dict[str, tuple[int, ...]] | None = None,
+    card: dict | None = None,
 ) -> Path:
     """Write ``model`` (images -> ``output_names`` tensors) to ``path`` as fp32 ONNX
     with a dynamic batch, store ``metadata`` as JSON under the ``pathotrain`` metadata
-    key, and check ONNX Runtime against PyTorch on random images. Weights over 2 GB
+    key (and ``card``, a pathoinfer ModelCard, under ``model_card``), and check ONNX
+    Runtime against PyTorch on random images. Weights over 2 GB
     go to ``<path>.data``, which must stay beside the graph. ``inputs``: the graph's
     inputs and their shapes without the batch, in ``model``'s argument order
     (default ``image`` of ``(3, size, size)``).
@@ -327,6 +477,8 @@ def export_onnx(
         external = len(list(Path(tmp).iterdir())) > 1
         graph = onnx.load(str(traced))
     graph.metadata_props.add(key="pathotrain", value=json.dumps(metadata))
+    if card is not None:
+        graph.metadata_props.add(key="model_card", value=json.dumps(card))
     onnx.save(
         graph,
         str(path),

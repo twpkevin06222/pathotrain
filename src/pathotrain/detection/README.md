@@ -178,8 +178,17 @@ for (x0, y0), tile in TileGenerator("slide.tif", tiling=tiling):
 
 ```bash
 pip install "pathotrain[detection,export]"   # adds onnx, onnxruntime
-python -m pathotrain.detection.export runs/det01/checkpoints/best.ckpt model.onnx
+python -m pathotrain.detection.export runs/det01/checkpoints/best.ckpt models/det01/model.onnx \
+    --name cell-det --score-threshold 0.5
+# trained on tile folders: also --mpp 0.5 --icc (or --no-icc)
 ```
+
+The output folder is a pathoinfer model folder (`model.onnx` plus `model_card.json`,
+also embedded under the `model_card` metadata key). Resolution, ICC, class names and
+colours, `--name`, `--version`, `--overlap` and the MLflow run id work as in the
+segmentation export (`../segmentation/README.md`); detection cards have no background
+class. The card's output records `boxes`, `scores`, `labels`, `xyxy` tile pixels and
+`--score-threshold` (default 0.5, in [0, 1]).
 
 - Input `image` (batch, 3, size, size) float32, normalised as in training. The
   graph includes the post-processing and returns the top 300 detections per
