@@ -272,13 +272,30 @@ for (x0, y0), tile in TileGenerator("slide.tif", tiling=tiling):
 
 ```bash
 pip install "pathotrain[export]"   # onnx, onnxruntime
-python -m pathotrain.segmentation.export runs/exp01/checkpoints/best.ckpt model.onnx
+python -m pathotrain.segmentation.export runs/exp01/checkpoints/best.ckpt models/seg01/model.onnx \
+    --name tumour-seg --version 1 --overlap 0.25
+# trained on tile folders: also --mpp 0.5 --icc (or --no-icc)
 ```
+
+The output folder is a pathoinfer model folder: `model.onnx` plus `model_card.json`
+(pathoinfer's ModelCard, also embedded under the `model_card` metadata key):
+
+- `input.mpp` and `input.icc` come from the training config (`tiling.tile_mpp`,
+  `data.color.icc`, default on). A model trained on tile folders has neither, so
+  `--mpp` and `--icc`/`--no-icc` are required; on slide-trained models they must agree
+  with the config or the export refuses.
+- Classes are `{id, name, color}`: names from `task.class_names`, else the class map
+  (label 0 is `background`, the card's `background_id`); an unnamed class stops the
+  export. Colours are tab20 unless the top-level `class_colors` overrides them
+  (`{name: [r, g, b]}`, 0-255; not under `task`, whose keys are task arguments).
+- `--name` (default: the config's name), `--version` (default `1`), `--overlap`
+  (`recommended_overlap`, default 0.25). `provenance.training_run_id` is the MLflow
+  run that wrote the checkpoint.
 
 - Input `image` (batch, 3, size, size) float32, normalised as in training;
   output `logits` (batch, num_classes, size, size). The batch is dynamic; the
   side is the training tile (or crop) unless `--size`.
-- The `pathotrain` metadata key holds JSON with what inference needs: `mean`,
+- The `pathotrain` metadata key (kept as the card's provenance) holds `mean`,
   `std`, `tile_size`, `tile_mpp`, `class_names` and `class_map`.
 - Export checks ONNX Runtime against PyTorch on random images. Weights over
   2 GB (e.g. Midnight encoders) go to `model.onnx.data`; keep it beside the graph.

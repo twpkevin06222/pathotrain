@@ -124,3 +124,25 @@ def test_export_writes_boxes_scores_and_labels(tmp_path):
     assert boxes.shape == (3, 300, 4) and scores.shape == labels.shape == (3, 300)
     assert (np.diff(scores, axis=1) <= 0).all() and set(np.unique(labels)) <= {0, 1}
     assert boxes.min() >= 0 and boxes.max() <= 128
+
+    # The pathoinfer model card, beside the graph and embedded in it.
+    import json
+
+    card = json.loads((tmp_path / "model_card.json").read_text())
+    assert json.loads(session.get_modelmeta().custom_metadata_map["model_card"]) == card
+    assert card["task"] == "detection" and card["input"]["tile_size"] == 128
+    assert card["output"] == {
+        "boxes": "boxes",
+        "scores": "scores",
+        "labels": "labels",
+        "box_format": "xyxy",
+        "box_units": "pixel",
+        "score_threshold": 0.5,
+    }
+    assert [(c["id"], c["name"]) for c in card["classes"]] == [(0, "small"), (1, "large")]
+    assert "background_id" not in card
+    loader = pytest.importorskip("pathoinfer.registry.loader")
+    loaded, _ = loader.load_model(tmp_path)
+    assert loaded.output.score_threshold == 0.5
+    with pytest.raises(ValueError, match="score_threshold"):
+        export(tmp_path / "m.ckpt", tmp_path / "m.onnx", score_threshold=1.5)
