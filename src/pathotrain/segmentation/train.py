@@ -25,14 +25,16 @@ Sections (``?`` marks optional ones)::
                                 # persistent_workers to true for the training loader,
                                 # multiprocessing_context to forkserver
     data:
-      train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
+      train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}, ...}
       val?: {slides: [...], annotations: [...], tiling: {...}}
       test?: {...}              # as val; scored only by the eval command
                                 # or tiles on disk, per split (SegmentationTileFolderDataset):
                                 # {root: dir} from export_segmentation_tiles,
                                 # or {images: dir, masks: dir}
       ...                       # the rest goes to SegmentationTileGenerator for the
-                                # slide splits (class_map, roi_class, backend, ...)
+                                # slide splits (class_map, roi_class, backend, ...);
+                                # the same keys in a split override them for it,
+                                # e.g. train: {..., negative_sampling: 0.2}
 """
 
 import argparse
@@ -68,6 +70,7 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     if "slides" not in s:
         return SegmentationTileFolderDataset(transform=transform, **s)
     data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val", "test", split)}
+    data |= {k: v for k, v in s.items() if k not in ("slides", "annotations", "tiling")}
     return SegmentationDataset(
         s["slides"],
         s["annotations"],

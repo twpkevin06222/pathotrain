@@ -141,6 +141,8 @@ def test_config_example_is_valid():
         *inspect.signature(TileGenerator.__init__).parameters,
     }
     assert set(cfg["data"]) - {"train", "val"} <= allowed
+    for split in ("train", "val"):
+        assert set(cfg["data"][split]) - {"slides", "annotations", "tiling"} <= allowed
 
 
 def test_build_dataset_reads_tile_folders(tmp_path):
@@ -154,6 +156,25 @@ def test_build_dataset_reads_tile_folders(tmp_path):
     assert len(ds) == 1 and ds[0][1].shape == (8, 8)
     with pytest.raises(TypeError):
         build_dataset({"data": {"train": {"images": images, "mask": masks}}}, "train", None)
+
+
+def test_build_dataset_split_options_override_shared(monkeypatch):
+    seen = {}
+
+    def capture(slides, annotations, **kwargs):
+        seen[slides[0]] = kwargs
+
+    monkeypatch.setattr(train_module, "SegmentationDataset", capture)
+    data = {
+        "object_mask_overlap": 0.2,
+        "negative_sampling": 0.1,
+        "train": {"slides": ["t"], "annotations": ["a"], "negative_sampling": 0.5},
+        "val": {"slides": ["v"], "annotations": ["a"]},
+    }
+    for split in ("train", "val"):
+        build_dataset({"data": data}, split, None)
+    assert seen["t"]["negative_sampling"] == 0.5 and seen["v"]["negative_sampling"] == 0.1
+    assert seen["t"]["object_mask_overlap"] == seen["v"]["object_mask_overlap"] == 0.2
 
 
 def test_export_writes_an_onnx_graph_with_its_metadata(tmp_path):
