@@ -87,11 +87,15 @@ data:
   roi_class: null           # e.g. roi: objects outlining the annotated region;
                             # mask pixels outside it become ignore_index
   # backend: openslide      # or fastslide (see loader.multiprocessing_context)
-  # Per split: lists of slide and GeoJSON directories, matched by file stem.
+  # Per split: lists of slide and GeoJSON directories, matched by file stem. Any
+  # option above may also be set in a split, overriding the shared value for it.
   train:
     slides: [data/train/slides]            # example paths
     annotations: [data/train/annotations]
     tiling: {tile_size: 256, tile_mpp: 0.5, tile_overlap: 0.0, grid: square, tissue_overlap: 0.1}
+    negative_sampling: 0.0  # also keep tiles with no annotation, this fraction of the
+                            # tiles kept above (0.2 adds 20%); with roi_class, only
+                            # tiles wholly inside the ROI
   val:                      # optional; without it there is no validation or best.ckpt
     slides: [data/val/slides]
     annotations: [data/val/annotations]
