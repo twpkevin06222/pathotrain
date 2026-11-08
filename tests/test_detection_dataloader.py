@@ -127,6 +127,15 @@ def test_export_writes_coco_and_folder_dataset_reads_it_back(exported):
     assert target["boxes"].tolist() == [[10, 20, 40, 32], [70, 50, 90, 90]]
     assert target["labels"].tolist() == [0, 1]
     assert ds[1][1]["boxes"].shape == (0, 4)
+    assert ds.class_count.tolist() == [[1, 1], [0, 0]]  # one box of each class, then none
+
+    class Counted:
+        def __init__(self, class_count):
+            self.class_count = np.array(class_count)
+
+    slides = DetectionDataset.__new__(DetectionDataset)
+    slides.generators = [Counted([[2]]), Counted([[0, 1], [1, 0]])]  # slide 1 has label 0 only
+    assert slides.class_count.tolist() == [[2, 0], [0, 1], [1, 0]]
     image, target = DetectionTileFolderDataset(exported, eval_transform(boxes=True))[0]
     assert target["boxes"].tolist() == [[10, 20, 40, 32], [70, 50, 90, 90]]
 

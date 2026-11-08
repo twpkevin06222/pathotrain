@@ -47,7 +47,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from patchology import DetectionTileGenerator
-from pathotrain.dataloader.base import SlideDataset, find_pairs, to_image_tensor
+from pathotrain.dataloader.base import SlideDataset, find_pairs, stack_rows, to_image_tensor
 
 COCO_FILE = "_annotations.coco.json"  # Roboflow's name, which RF-DETR looks for
 
@@ -100,6 +100,12 @@ class DetectionDataset(SlideDataset):
         super().__init__(
             slide_dirs, annotation_dirs, transform, class_map=class_map, **generator_kwargs
         )
+
+    @property
+    def class_count(self) -> np.ndarray:
+        """``(tiles, labels)`` number of boxes per label in each tile, from the generators'
+        ``class_count``."""
+        return stack_rows([g.class_count for g in self.generators]).astype(int)
 
     def __getitem__(self, index: int) -> object:
         gen, i = self.locate(index)
@@ -203,6 +209,13 @@ class DetectionTileFolderDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.files)
+
+    @property
+    def class_count(self) -> np.ndarray:
+        """``(tiles, num_classes)`` number of boxes per label in each tile."""
+        width = len(self.class_names)
+        counts = [np.bincount(t["labels"], minlength=width) for t in self.targets]
+        return np.array(counts, dtype=int).reshape(len(counts), width)
 
     def __getitem__(self, index: int) -> object:
         tile = np.asarray(Image.open(self.files[index]).convert("RGB"))

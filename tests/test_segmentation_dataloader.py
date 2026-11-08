@@ -4,7 +4,12 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from pathotrain.dataloader import SegmentationDataset, SegmentationTileFolderDataset, find_pairs
+from pathotrain.dataloader import (
+    SegmentationDataset,
+    SegmentationTileFolderDataset,
+    export_segmentation_tiles,
+    find_pairs,
+)
 
 
 def touch(d, *names):
@@ -79,3 +84,62 @@ def test_tile_folder_pairs_image_and_mask_dirs_by_stem(tmp_path):
             SegmentationTileFolderDataset(**bad)
     with pytest.raises(ValueError, match="no image"):
         SegmentationTileFolderDataset(images=images, masks=touch(tmp_path / "empty"))
+
+
+# Two slides with different label sets: s1 has labels 0-1, s2 has 0-3 and ignored pixels.
+_MASKS = {
+    "s1": [np.array([[0, 0, 1, 1]] * 4, np.uint8), np.zeros((4, 4), np.uint8)],
+    "s2": [np.array([[0, 3, 3, 255]] * 4, np.uint8)],
+}
+
+
+class _FakeSegmentationGenerator:
+    """Stands in for patchology's SegmentationTileGenerator, with its ``class_fraction``."""
+
+    def __init__(self, slide, ground_truth, **kwargs):
+        self.masks = _MASKS[slide.stem]
+        width = max(int(m[m != 255].max()) for m in self.masks) + 1
+        self.class_fraction = np.array(
+            [[(m == k).mean() for k in range(width)] for m in self.masks]
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def __len__(self):
+        return len(self.masks)
+
+    def __iter__(self):
+        tile = np.zeros((4, 4, 3), np.uint8)
+        return iter([((256 * i, 0), tile, m) for i, m in enumerate(self.masks)])
+
+
+def test_class_fraction_agrees_across_slides_export_and_mask_scan(tmp_path, monkeypatch):
+    from pathotrain.dataloader import segmentation as segmentation_module
+    from pathotrain.dataloader.base import stack_rows
+
+    monkeypatch.setattr(
+        segmentation_module, "SegmentationTileGenerator", _FakeSegmentationGenerator
+    )
+    touch(tmp_path / "slides", "s1.tif", "s2.tif")
+    touch(tmp_path / "ann", "s1.geojson", "s2.geojson")
+    slides = SegmentationDataset.__new__(SegmentationDataset)
+    slides.generators = [
+        _FakeSegmentationGenerator(tmp_path / "slides" / f"{s}.tif", None) for s in ("s1", "s2")
+    ]
+    # Padded to 4 columns; s2's ignored quarter counts in no column.
+    expected = np.array([[0.5, 0.5, 0, 0], [1, 0, 0, 0], [0.25, 0, 0, 0.5]])
+    np.testing.assert_allclose(slides.class_fraction, expected)
+    np.testing.assert_allclose(stack_rows([]), np.zeros((0, 1)))
+
+    root = export_segmentation_tiles(
+        [tmp_path / "slides"], [tmp_path / "ann"], tmp_path / "tiles", "train"
+    )
+    from_csv = SegmentationTileFolderDataset(root)
+    assert "class_fraction" in vars(from_csv)  # read from tiles.csv, no mask scan
+    np.testing.assert_allclose(from_csv.class_fraction, expected)
+    scanned = SegmentationTileFolderDataset(images=root / "images", masks=root / "masks")
+    np.testing.assert_allclose(scanned.class_fraction, expected)

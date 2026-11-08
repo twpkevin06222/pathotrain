@@ -81,6 +81,12 @@ bcss = SegmentationTileFolderDataset(images="tissue-bcss/images", masks="tissue-
 Images of different sizes cannot be batched as they are: crop them to one size
 in the transform, e.g. `train_transform(crop=512)`.
 
+Class content per tile, e.g. to weight sampling: `class_fraction[i, k]` is the
+share of tile `i`'s pixels with label `k` (column 0 background, `ignore_index`
+pixels in no column). `SegmentationDataset` takes it from patchology, the folder
+dataset from `tiles.csv` (`class_<k>` columns), or else reads every mask once on
+first use. Detection datasets have `class_count[i, k]`, boxes per label.
+
 Both datasets take `transform(tile, mask)`, called with the `(H, W, 3)` uint8
 tile and `(H, W)` uint8 mask; its return value is the sample. Use it for
 augmentation:

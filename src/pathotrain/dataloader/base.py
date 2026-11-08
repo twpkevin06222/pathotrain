@@ -55,6 +55,15 @@ def find_pairs(
     return pairs
 
 
+def stack_rows(arrays: Sequence[np.ndarray]) -> np.ndarray:
+    """Stack per-slide ``(tiles, labels)`` arrays into one, padding the label columns a
+    slide lacks (its annotation has no higher label) with zeros."""
+    width = max((a.shape[1] for a in arrays), default=1)
+    if not arrays:
+        return np.zeros((0, width))
+    return np.concatenate([np.pad(a, ((0, 0), (0, width - a.shape[1]))) for a in arrays])
+
+
 def to_image_tensor(tile: np.ndarray) -> torch.Tensor:
     """``(H, W, 3)`` uint8 tile to a ``(3, H, W)`` float32 tensor in ``[0, 1]``."""
     return torch.from_numpy(np.ascontiguousarray(tile.transpose(2, 0, 1))).float() / 255

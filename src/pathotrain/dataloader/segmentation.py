@@ -34,6 +34,7 @@ Example::
 """
 
 import csv
+import functools
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -48,10 +49,16 @@ from pathotrain.dataloader.base import (
     SlideDataset,
     by_stem,
     find_pairs,
+    stack_rows,
     to_image_tensor,
 )
 
 Transform = Callable[[np.ndarray, np.ndarray], object]
+
+
+def _class_columns(width: int) -> list[str]:
+    """``tiles.csv`` column names of the per-label pixel shares."""
+    return [f"class_{k}" for k in range(width)]
 
 
 def _sample(tile: np.ndarray, mask: np.ndarray, transform: Transform | None) -> object:
@@ -76,6 +83,12 @@ class SegmentationDataset(SlideDataset):
 
     generator_cls = SegmentationTileGenerator
 
+    @property
+    def class_fraction(self) -> np.ndarray:
+        """``(tiles, labels)`` share of each tile's pixels per label value (column 0 is
+        background, ignored pixels in no column), from the generators' ``class_fraction``."""
+        return stack_rows([g.class_fraction for g in self.generators])
+
     def __getitem__(self, index: int) -> object:
         gen, i = self.locate(index)
         _, tile, mask = gen.get_tile(i)
@@ -94,25 +107,32 @@ def export_segmentation_tiles(
 
     Layout: ``images/<slide>_<x>_<y>.<fmt>``, ``masks/<slide>_<x>_<y>.png`` (always
     lossless) and ``tiles.csv`` (image, mask, slide,
-    x, y; level-0 coordinates). Keyword arguments are as for :class:`SegmentationDataset`.
+    x, y; level-0 coordinates; then ``class_<k>``, the tile's share of pixels with
+    label ``k``, see :attr:`SegmentationDataset.class_fraction`). Keyword arguments are
+    as for :class:`SegmentationDataset`.
     """
     root = Path(out_dir) / split
     images, masks = root / "images", root / "masks"
     images.mkdir(parents=True, exist_ok=True)
     masks.mkdir(parents=True, exist_ok=True)
-    rows = []
+    rows, fractions = [], []
     for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):
         with SegmentationTileGenerator(slide, ground_truth, **generator_kwargs) as gen:
+            fractions.append(gen.class_fraction)
             for (x, y), tile, mask in gen:
                 name = f"{slide.stem}_{x}_{y}"
                 Image.fromarray(tile).save(images / f"{name}.{fmt}")
                 Image.fromarray(mask).save(masks / f"{name}.png")
                 rows.append((f"images/{name}.{fmt}", f"masks/{name}.png", slide.name, x, y))
         logger.info("{}: wrote {} tiles to {}", slide.name, len(gen), root)
+    fraction = stack_rows(fractions)
     with open(root / "tiles.csv", "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(("image", "mask", "slide", "x", "y"))
-        writer.writerows(rows)
+        writer.writerow(("image", "mask", "slide", "x", "y", *_class_columns(fraction.shape[1])))
+        writer.writerows(
+            (*row, *(round(float(v), 6) for v in frac))
+            for row, frac in zip(rows, fraction, strict=True)
+        )
     return root
 
 
@@ -137,14 +157,21 @@ class SegmentationTileFolderDataset(Dataset):
         *,
         images: str | Path | None = None,
         masks: str | Path | None = None,
+        ignore_index: int = 255,
     ) -> None:
         self.transform = transform
+        self.ignore_index = ignore_index
         if (root is None) == (images is None) or (images is None) != (masks is None):
             raise ValueError("pass either root or both images and masks")
         if root is not None:
             root = Path(root)
             with open(root / "tiles.csv", newline="") as f:
-                self.pairs = [(root / r["image"], root / r["mask"]) for r in csv.DictReader(f)]
+                rows = list(csv.DictReader(f))
+            self.pairs = [(root / r["image"], root / r["mask"]) for r in rows]
+            width = sum(1 for k in (rows[0] if rows else {}) if k.startswith("class_"))
+            if width:  # written by export_segmentation_tiles; older exports lack it
+                columns = _class_columns(width)
+                self.class_fraction = np.array([[float(r[c]) for c in columns] for r in rows])
             return
         tiles, labels = by_stem([images], None), by_stem([masks], None)
         for stem in sorted(tiles.keys() - labels.keys()):
@@ -157,6 +184,22 @@ class SegmentationTileFolderDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.pairs)
+
+    @functools.cached_property
+    def class_fraction(self) -> np.ndarray:
+        """``(tiles, labels)`` share of each mask's pixels per label value (column 0 is
+        background, ``ignore_index`` in no column): from ``tiles.csv`` when it has it,
+        else read from every mask once, on first use."""
+        counts = []
+        for _, mask in self.pairs:
+            values = np.asarray(Image.open(mask)).ravel()
+            count = np.bincount(values, minlength=self.ignore_index + 1).astype(float)
+            count[self.ignore_index] = 0
+            counts.append(count / values.size)
+        width = max((len(c) for c in counts), default=1)
+        fraction = np.array([np.pad(c, (0, width - len(c))) for c in counts]).reshape(-1, width)
+        labelled = np.flatnonzero(fraction.any(axis=0))
+        return fraction[:, : (labelled[-1] + 1 if labelled.size else 1)]
 
     def __getitem__(self, index: int) -> object:
         image, mask = self.pairs[index]
