@@ -2,7 +2,13 @@ import pytest
 import torch
 
 from pathotrain.detection.train import check_eval_crop
-from pathotrain.segmentation.task import SegmentationTask, _starts, sliding_window
+from pathotrain.segmentation import build_model
+from pathotrain.segmentation.task import (
+    SegmentationTask,
+    _starts,
+    input_multiple,
+    sliding_window,
+)
 from pathotrain.segmentation.train import task_kwargs
 
 
@@ -53,3 +59,25 @@ def test_detection_refuses_a_crop_when_it_evaluates():
     check_eval_crop({"augmentation": {"crop": None}})
     with pytest.raises(ValueError, match="windowed"):
         check_eval_crop({"augmentation": {"crop": 512}})
+
+
+def test_input_multiple_of_each_model_family():
+    smp = {"encoder_name": "resnet18", "encoder_weights": None}
+    assert input_multiple(build_model("smp:fpn", 2, **smp)) == 32
+    assert input_multiple(build_model("nnunet:plain", 2)) == 64
+    assert input_multiple(build_model("nnunet:resenc", 2, n_stages=5)) == 16
+    assert input_multiple(torch.nn.Conv2d(3, 2, 1)) == 1
+
+
+@pytest.mark.parametrize("window", [None, 256])
+def test_validation_pads_sides_the_model_cannot_take(window):
+    # U-Net++ refuses sides not divisible by 32; a 512 x 400 tile is still scored whole.
+    torch.manual_seed(0)
+    model = build_model("smp:unetplusplus", 2, encoder_name="resnet18", encoder_weights=None)
+    image, mask = torch.randn(1, 3, 512, 400), torch.randint(0, 2, (1, 512, 400))
+    with pytest.raises(RuntimeError, match="divisible by 32"):
+        model(image)
+    task = SegmentationTask(model.eval(), 2, window=window)
+    with torch.no_grad():
+        task.validation_step((image, mask))
+    assert task.iou.confmat.sum() == 512 * 400
