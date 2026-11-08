@@ -68,7 +68,8 @@ train = SegmentationTileFolderDataset("tiles/train")
 ```
 
 Layout: `tiles/<split>/images/<slide>_<x>_<y>.png`, `masks/<slide>_<x>_<y>.png`
-(lossless labels) and `tiles.csv`.
+(lossless labels) and `tiles.csv`. Export refuses a split folder that is not empty
+(both exporters): delete it to re-export, or export each slide set to its own split.
 
 Tiles from elsewhere, without `tiles.csv`: pass the two directories and files
 are paired by stem (images without a mask, and masks without an image, are

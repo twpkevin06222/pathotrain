@@ -107,6 +107,13 @@ def exported(tmp_path, monkeypatch):
     )
 
 
+def test_export_refuses_a_split_already_exported(exported, tmp_path):
+    with pytest.raises(FileExistsError, match="not empty"):
+        export_detection_tiles(
+            [tmp_path / "slides"], [tmp_path / "ann"], exported.parent, "train", {"class01": 0}
+        )
+
+
 def test_export_writes_coco_and_folder_dataset_reads_it_back(exported):
     coco = json.loads((exported / "_annotations.coco.json").read_text())
     assert [i["file_name"] for i in coco["images"]] == ["s1_0_0.png", "s1_256_0.png"]

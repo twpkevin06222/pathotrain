@@ -152,7 +152,8 @@ metrics = trainer.fit(
 )
 ```
 
-- `val/loss`, `val/miou` and `val/iou_<class>` are logged after every epoch. Pixels set to
+- `val/loss`, `val/miou`, `val/miou_fg` (the mean without background, class 0) and
+  `val/iou_<class>` are logged after every epoch. Pixels set to
   255 (outside the ROI, or uncovered by augmentation) are excluded from both
   the loss and the metrics.
 - Model selection: `ModelCheckpoint` keeps `best.ckpt` by `val/miou` (higher

@@ -144,6 +144,9 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         resume,
         monitor="val/balanced_acc",
         train_sampler=train_sampler(cfg),
+        # Val workers persist too (restarting them took ~3 s an epoch on MHIST); tiles
+        # are read from disk, so they hold little RAM. Dropped without workers.
+        persistent_workers=True,
     )
 
 

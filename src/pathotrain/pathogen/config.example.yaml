@@ -72,7 +72,8 @@ early_stopping:
 loader:
   batch_size: 8
   num_workers: 8
-# val_loader: {batch_size: 16}  # validation and eval: loader's settings updated by these
+# val_loader: {batch_size: 16}  # validation and eval: loader's settings updated by these;
+#                           # persistent_workers: true keeps val workers across epochs
 
 data:
   crop: 512                 # random crop (train), centre crop (val), same place in both tiles

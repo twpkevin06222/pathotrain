@@ -110,8 +110,15 @@ def export_segmentation_tiles(
     x, y; level-0 coordinates; then ``class_<k>``, the tile's share of pixels with
     label ``k``, see :attr:`SegmentationDataset.class_fraction`). Keyword arguments are
     as for :class:`SegmentationDataset`.
+
+    Raises:
+        FileExistsError: ``out_dir/split`` is not empty (a re-export would leave the
+            old tiles beside the new index).
     """
     root = Path(out_dir) / split
+    if root.is_dir() and any(root.iterdir()):
+        # A second export would replace the index but leave the first one's tiles behind.
+        raise FileExistsError(f"{root} is not empty; delete it or export to another split")
     images, masks = root / "images", root / "masks"
     images.mkdir(parents=True, exist_ok=True)
     masks.mkdir(parents=True, exist_ok=True)
