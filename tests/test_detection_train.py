@@ -103,6 +103,8 @@ def test_config_example_is_valid():
         *inspect.signature(TileGenerator.__init__).parameters,
     }
     assert set(cfg["data"]) - {"train", "val"} <= allowed
+    for split in ("train", "val"):
+        assert set(cfg["data"][split]) - {"slides", "annotations", "tiling"} <= allowed
     assert len(set(cfg["data"]["class_map"].values())) == cfg["model"]["num_classes"]
 
 
@@ -162,3 +164,25 @@ def test_sampling_section_passes_a_class_weighted_sampler(tmp_path, monkeypatch)
     train({**_cfg(tmp_path / "run"), "sampling": {"power": 1.0}})
     weights = seen["s"].weights
     assert len(weights) == 4 and weights[3] / weights[0] == pytest.approx(3.0)  # 1/4 vs 3/4
+
+
+def test_build_dataset_split_options_override_shared(monkeypatch):
+    seen = {}
+
+    def capture(slides, annotations, **kwargs):
+        seen[slides[0]] = kwargs
+
+    monkeypatch.setattr(train_module, "DetectionDataset", capture)
+    cfg = {
+        "model": {"num_classes": 2},
+        "data": {
+            "class_map": {"a": 0, "b": 1},
+            "min_objects": 1,
+            "train": {"slides": ["t"], "annotations": ["x"], "min_objects": 0},
+            "val": {"slides": ["v"], "annotations": ["x"]},
+        },
+    }
+    for split in ("train", "val"):
+        build_dataset(cfg, split, None)
+    assert seen["t"]["min_objects"] == 0 and seen["v"]["min_objects"] == 1
+    assert seen["t"]["class_map"] == seen["v"]["class_map"] == {"a": 0, "b": 1}

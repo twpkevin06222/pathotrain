@@ -124,7 +124,7 @@ python -m pathotrain.detection.eval runs/det01/checkpoints/best.ckpt --split val
 ```
 
 - The model, normalisation and task settings come from the checkpoint; `data`,
-  `loader` and `trainer` too, unless `--config` gives them.
+  `loader`, `val_loader` and `trainer` too, unless `--config` gives them.
 - Prints the metrics as JSON keyed by the split (`test/map`, `test/ap_<class>`,
   ...). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - With `mlflow_db` in the config (the checkpoint's or `--config`'s) or

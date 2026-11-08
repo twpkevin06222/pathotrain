@@ -4,7 +4,7 @@
     python -m pathotrain.pathogen.eval best.ckpt --split val --steps 50
 
 The model and task settings (and its EMA weights) come from the checkpoint's
-config. So do ``data``, ``loader`` and ``trainer``, unless ``--config`` names a
+config. So do ``data``, ``loader``, ``val_loader`` and ``trainer``, unless ``--config`` names a
 YAML with those sections, e.g. the experiment config with a ``test`` split
 (``source`` and ``target`` folders) added after training. Tiles are prepared as
 for validation (``data.crop`` centre crop).
@@ -30,7 +30,7 @@ from pathotrain import experiment
 from pathotrain.engine import load_config
 from pathotrain.pathogen import train
 
-OVERRIDES = ("data", "loader", "trainer", "mlflow_db")
+OVERRIDES = ("data", "loader", "val_loader", "trainer", "mlflow_db")
 
 
 def evaluate(
@@ -42,7 +42,7 @@ def evaluate(
 ) -> dict[str, float]:
     """Score ``checkpoint`` on ``data[split]`` and return the metrics keyed ``<split>/...``.
 
-    ``config``: an experiment config whose ``data``, ``loader``, ``trainer`` and
+    ``config``: an experiment config whose ``data``, ``loader``, ``val_loader``, ``trainer`` and
     ``mlflow_db`` replace the checkpoint's. ``steps``: sampling steps (default the
     task's ``sample_steps``). ``mlflow_db``: log the metrics to this MLflow store
     (default the config's ``mlflow_db``; neither logs nothing).
@@ -64,7 +64,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("checkpoint", help="best.ckpt or last.ckpt written by train")
     parser.add_argument("--split", default="test", help="data split to score (default: test)")
-    parser.add_argument("--config", help="YAML whose data, loader and trainer sections apply")
+    parser.add_argument(
+        "--config", help="YAML whose data, loader, val_loader and trainer sections apply"
+    )
     parser.add_argument("--steps", type=int, help="sampling steps (default: the task's)")
     parser.add_argument("--mlflow-db", help="also log the metrics to this MLflow SQLite file")
     args = parser.parse_args(argv)
