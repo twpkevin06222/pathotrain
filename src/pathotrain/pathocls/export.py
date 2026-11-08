@@ -21,8 +21,8 @@ import argparse
 from pathlib import Path
 
 from pathotrain import experiment
-from pathotrain.histossl.backbones import preprocessing
 from pathotrain.pathocls import train
+from pathotrain.pathocls.backbones import preprocessing
 
 
 def export(

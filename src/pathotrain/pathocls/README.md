@@ -1,9 +1,10 @@
 # pathocls
 
 Tile classification you can train, score, export and serve: a linear or MLP head on a
-foundation-model backbone's tile embedding (CLS token and mean patch token). The
-backbone (`pathofm`, or a histossl checkpoint or export) is frozen, a linear probe, or
-fine-tuned.
+backbone's tile embedding. The backbone is a foundation model (`pathofm`, or a histossl
+checkpoint or export; CLS token and mean patch token) or a timm model (`timm:<name>`;
+its pooled features), frozen (a probe) or fine-tuned; a timm model can also be trained
+from scratch.
 
 ```bash
 cp src/pathotrain/pathocls/config.example.yaml cls.yaml          # edit data paths
@@ -18,9 +19,18 @@ python -m pathotrain.pathocls.export runs/cls01/checkpoints/best.ckpt out/model.
 Each split is class folders (`{root: dir}`, `dir/<class>/*.png`) or a CSV with `path`
 and `label` columns (`{csv: file}`, paths relative to the CSV or to `root`), read with
 `pathotrain.dataloader.ClassTileDataset`. Tiles are resized and centre cropped to the
-backbone's input size (224 px) and normalised as it expects. The class order is
+backbone's input size (224 px for pathofm; a timm model's pretrained config, whose
+`crop_pct` is ignored) and normalised as it expects. The class order is
 `task.class_names`, default the train split's labels sorted; the run's `config.yaml`
 records it, with `model.num_classes`.
+
+## Backbones
+
+- `model.name: midnight-12k` (any pathofm model), a histossl `.ckpt` or export folder.
+- `model.name: timm:<name>`, any `timm.list_models()` name, with ImageNet weights;
+  `model.pretrained: false` trains it from scratch, which needs `model.freeze: false`
+  and a `task.backbone_lr` as high as `lr`. From scratch needs far more labelled tiles
+  than most pathology sets have; keep it as a baseline. timm needs no extra install.
 
 ## Training
 
@@ -74,6 +84,19 @@ MHIST (HP vs SSA, 2175 train / 977 test tiles), midnight-12k, defaults of
 | online probe, last epoch (`augmentation: {n: 2, m: 3}`, 10 epochs, bf16) | 0.795 | 0.907 |
 | fine-tuned, last epoch (`backbone_lr: 1e-5`, 1 warmup epoch, batch 32, 10 epochs, bf16) | 0.866 | 0.953 |
 
+timm ConvNeXt-T (`timm:convnext_tiny.in12k_ft_in1k`), same data, last epoch:
+
+| | bal. acc | AUROC | run time |
+|---|---|---|---|
+| cached probe (50 epochs) | 0.793 | 0.874 | 25 s |
+| fine-tuned (`backbone_lr: 1e-4`, wd 0.05, `augmentation: {n: 2, m: 3}`, 20 epochs, bf16) | 0.879 | 0.957 | 2.7 min |
+| from scratch (`pretrained: false`, both lr 1e-3, same augmentation, 50 epochs, bf16) | 0.673 | 0.810 | 5.6 min |
+
+As a frozen probe, midnight-12k beats ImageNet ConvNeXt-T (0.816 vs 0.793). Fine-tuned,
+ConvNeXt-T matched or beat the midnight-12k run above, but with different settings (20
+epochs with augmentation vs 10 without), so the two fine-tuned rows don't compare
+directly. From scratch is far behind, as expected on 2175 tiles.
+
 On an RTX 5090: the cached probe's embedding pass took 30 s and its 50 head epochs about
 1 s; the online probe about 15 s per epoch; fine-tuning about 50 s per epoch. Augmenting
 a frozen backbone did not help here, and the MLP head overfit the 2175 tiles (train loss
@@ -83,5 +106,4 @@ state), so keep the disk free.
 
 ## Not yet
 
-Layer-wise lr decay and partial freezing for fine-tuning, timm backbones and
-class-weighted sampling: see the design note in the pathotrain handoff.
+Layer-wise lr decay and partial freezing for fine-tuning, and class-weighted sampling: see the design note in the pathotrain handoff.

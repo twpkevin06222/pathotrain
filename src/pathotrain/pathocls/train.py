@@ -4,8 +4,9 @@
     python -m pathotrain.pathocls.train config.yaml --resume runs/cls01/checkpoints/last.ckpt
 
 Start from ``config.example.yaml`` next to this module. The classifier is a linear (or
-MLP) head on the backbone's standardised tile embedding (CLS token and mean patch token, as the
-model cards and histossl's linear probe use), trained with AdamW. Tiles are resized and
+MLP) head on the backbone's standardised tile embedding (for pathofm / histossl models
+the CLS token and mean patch token, as the model cards and histossl's linear probe use;
+for ``timm:<name>`` models timm's pooled features), trained with AdamW. Tiles are resized and
 centre cropped to the backbone's input size and normalised as it expects. Two paths:
 
 - Cached (the default: frozen backbone, no ``augmentation``): every tile is embedded
@@ -25,7 +26,9 @@ the head and the config (see :func:`load_model`). Sections (``?`` marks optional
     seed: 0
     output_dir: runs/cls01      # config.yaml, checkpoints/, logs/
     model:
-      name: midnight-12k        # a pathofm model, a histossl .ckpt or a histossl export folder
+      name: midnight-12k        # a pathofm model, a histossl .ckpt or export folder, or
+                                # timm:<name> (e.g. timm:convnext_tiny.in12k_ft_in1k)
+      pretrained?: true         # timm only: false trains from scratch (needs freeze: false)
       num_classes?: 9           # checked against the classes found
       freeze?: true             # false fine-tunes the backbone (online)
       head?: {hidden: 512, dropout: 0.1}  # an MLP head; default linear (Head)
@@ -57,9 +60,10 @@ from pathotrain import experiment
 from pathotrain.dataloader import ClassTileDataset
 from pathotrain.dataloader.augmentation import train_transform
 from pathotrain.engine import load_config, load_trainable_state
-from pathotrain.histossl.backbones import preprocessing
-from pathotrain.histossl.eval.linear_probe import extract, load_encoder, probe_transform
-from pathotrain.pathocls.model import Classifier, Head, embedding_dim
+from pathotrain.histossl.eval.linear_probe import probe_transform
+from pathotrain.pathocls import backbones
+from pathotrain.pathocls.backbones import embedding_dim, extract, preprocessing
+from pathotrain.pathocls.model import Classifier, Head
 from pathotrain.pathocls.task import ClassificationTask
 
 STATS_TILES = 4096  # train tiles whose embeddings set the head's standardisation online
@@ -105,12 +109,11 @@ def complete(cfg: dict) -> dict:
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     cfg = complete(cfg)
-    config_path = experiment.start(cfg, resume)
-    backbone = load_encoder(cfg["model"]["name"]).requires_grad_(False)
-    head = Head(
-        embedding_dim(backbone), cfg["model"]["num_classes"], **cfg["model"].get("head", {})
-    )
     freeze = cfg["model"].get("freeze", True)
+    if freeze and not cfg["model"].get("pretrained", True):
+        raise ValueError("a backbone trained from scratch (pretrained: false) needs freeze: false")
+    config_path = experiment.start(cfg, resume)
+    backbone, head = _build(cfg)
     if freeze and "augmentation" not in cfg:
         train_set = embed(cfg, backbone, "train")
         val_set = embed(cfg, backbone, "val") if "val" in cfg["data"] else None
@@ -124,13 +127,22 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         _standardise(head, stats.tensors[0])
         if not freeze:
             backbone.requires_grad_(True)
-            backbone.gradient_checkpointing_enable({"use_reentrant": False})
+            backbones.enable_grad_checkpointing(backbone)
         model = Classifier(backbone, head)
     task = ClassificationTask(model, cfg["model"]["num_classes"], **cfg["task"])
     task.checkpoint_trainable_only = freeze  # online, the head without the frozen backbone
     return experiment.fit(
         cfg, task, train_set, val_set, config_path, resume, monitor="val/balanced_acc"
     )
+
+
+def _build(cfg: dict, pretrained: bool = True) -> tuple[nn.Module, Head]:
+    """The frozen backbone ``model`` names and a fresh head on it."""
+    model = cfg["model"]
+    pretrained = pretrained and model.get("pretrained", True)
+    backbone = backbones.load(model["name"], pretrained).requires_grad_(False)
+    head = Head(embedding_dim(backbone), model["num_classes"], **model.get("head", {}))
+    return backbone, head
 
 
 def _standardise(head: Head, x: torch.Tensor) -> None:
@@ -160,14 +172,15 @@ def load_model(path: str | Path, map_location: str = "cpu") -> tuple[Classifier,
     if "config" not in ckpt:
         raise ValueError(f"{path} has no config; it was not written by pathotrain's train")
     cfg = ckpt["config"]
-    backbone = load_encoder(cfg["model"]["name"]).requires_grad_(False).eval()
-    head = Head(
-        embedding_dim(backbone), cfg["model"]["num_classes"], **cfg["model"].get("head", {})
-    )
+    freeze = cfg["model"].get("freeze", True)
+    # Fine-tuned timm weights are all in the checkpoint: skip the ImageNet download.
+    timm = cfg["model"]["name"].startswith(backbones.TIMM)
+    backbone, head = _build(cfg, pretrained=freeze or not timm)
+    backbone.eval()
     classifier, state = Classifier(backbone, head), ckpt["model"]
     if not any(k.startswith("head.") for k in state):
         head.load_state_dict(state)  # cached path: the head alone
-    elif cfg["model"].get("freeze", True):
+    elif freeze:
         load_trainable_state(classifier, state)  # frozen online: the head (and buffers)
     else:
         classifier.load_state_dict(state)  # fine-tuned: backbone and head
