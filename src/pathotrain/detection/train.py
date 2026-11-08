@@ -93,6 +93,7 @@ def check_eval_crop(cfg: dict) -> None:
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
+    experiment.check_foreground_crop(cfg)
     config_path = experiment.start(cfg, resume)
     task = DetectionTask(build_detector(**cfg["model"]), **cfg.get("task", {}))
     augmentation = cfg.get("augmentation", {})
