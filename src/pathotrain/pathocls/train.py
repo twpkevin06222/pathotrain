@@ -37,6 +37,8 @@ the head and the config (see :func:`load_model`). Sections (``?`` marks optional
     augmentation?: {...}        # train_transform (n, m, blur, noise, jpeg); trains online
     features?: {...}            # embedding passes (batch_size, num_workers)
     trainer?: {...}             # TrainerConfig
+    sampling?: {...}            # class-weighted sampling of training tiles (power,
+                                # max_ratio, num_samples), see pathotrain.dataloader.sampling
     checkpoint?: {...}          # ModelCheckpoint (default monitor val/balanced_acc)
     early_stopping?: {...}
     loader?: {...}              # training batches (embeddings, or tiles online)
@@ -51,14 +53,16 @@ the head and the config (see :func:`load_model`). Sections (``?`` marks optional
 import argparse
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import Subset, TensorDataset
+from torch.utils.data import Subset, TensorDataset, WeightedRandomSampler
 from torchvision.transforms import v2
 
 from pathotrain import experiment
 from pathotrain.dataloader import ClassTileDataset
 from pathotrain.dataloader.augmentation import train_transform
+from pathotrain.dataloader.sampling import build_sampler
 from pathotrain.engine import load_config, load_trainable_state
 from pathotrain.histossl.eval.linear_probe import probe_transform
 from pathotrain.pathocls import backbones
@@ -132,8 +136,24 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     task = ClassificationTask(model, cfg["model"]["num_classes"], **cfg["task"])
     task.checkpoint_trainable_only = freeze  # online, the head without the frozen backbone
     return experiment.fit(
-        cfg, task, train_set, val_set, config_path, resume, monitor="val/balanced_acc"
+        cfg,
+        task,
+        train_set,
+        val_set,
+        config_path,
+        resume,
+        monitor="val/balanced_acc",
+        train_sampler=train_sampler(cfg),
     )
+
+
+def train_sampler(cfg: dict) -> WeightedRandomSampler | None:
+    """The class-weighted sampler over the train split that the ``sampling`` section
+    asks for (each tile's class content is its one-hot label), or None without one."""
+    if "sampling" not in cfg:
+        return None
+    labels = [label for _, label in build_dataset(cfg, "train").samples]
+    return build_sampler(cfg, np.eye(cfg["model"]["num_classes"])[labels])
 
 
 def _build(cfg: dict, pretrained: bool = True) -> tuple[nn.Module, Head]:

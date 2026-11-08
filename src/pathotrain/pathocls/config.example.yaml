@@ -43,6 +43,13 @@ trainer:
   devices: 1
   precision: 32-true        # bf16-mixed on GPU when training online
 
+# sampling:                 # class-weighted sampling of training tiles (off when left
+#   power: 0.5              # out): 0 keeps the class shares, 1 balances them fully
+#   max_ratio: 10           # a class drawn at most this many times more per tile than
+#                           # the most common one
+#   num_samples: null       # draws per epoch; null = number of training tiles
+#                           # See pathotrain.dataloader.sampling.
+
 # checkpoint: {monitor: val/balanced_acc, mode: max}  # the defaults
 # early_stopping: {patience: 10}
 

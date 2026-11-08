@@ -55,6 +55,10 @@ Three ways, set by `model.freeze` and an `augmentation` section:
   them), then applies one linear layer, or with `model.head: {hidden: 512, dropout:
   0.1}` an MLP (one GELU hidden layer, dropout before the output layer); trained with
   AdamW and a cosine schedule.
+- Class imbalance: a `sampling` section draws training tiles by class
+  (`pathotrain.dataloader.sampling`, each tile's content its one-hot label):
+  `power: 1` balances the classes, `0.5` (default) halves the gap; `max_ratio` caps
+  the upweighting. Draws are with replacement, `num_samples` per epoch.
 - Metrics: `val/acc`, `val/balanced_acc` (mean recall per class), `val/macro_f1`,
   `val/auroc` (macro one-vs-rest), `val/recall_<class>`, `val/loss`; the same as
   histossl's linear probe, so numbers compare. `best.ckpt` follows
@@ -84,6 +88,11 @@ MHIST (HP vs SSA, 2175 train / 977 test tiles), midnight-12k, defaults of
 | online probe, last epoch (`augmentation: {n: 2, m: 3}`, 10 epochs, bf16) | 0.795 | 0.907 |
 | fine-tuned, last epoch (`backbone_lr: 1e-5`, 1 warmup epoch, batch 32, 10 epochs, bf16) | 0.866 | 0.953 |
 
+With `sampling: {power: 1.0}` (train classes 71/29% drawn 50/50), the cached
+midnight-12k probe ends at 0.817 / 0.899 (HP recall 0.742, SSA 0.892) against
+0.816 / 0.891 (0.772, 0.861) without: the same balanced accuracy, recall moved toward
+the rarer class.
+
 timm ConvNeXt-T (`timm:convnext_tiny.in12k_ft_in1k`), same data, last epoch:
 
 | | bal. acc | AUROC | run time |
@@ -106,4 +115,5 @@ state), so keep the disk free.
 
 ## Not yet
 
-Layer-wise lr decay and partial freezing for fine-tuning, and class-weighted sampling: see the design note in the pathotrain handoff.
+Layer-wise lr decay, partial freezing or LoRA for fine-tuning, and slide-level labels
+(MIL): see the design note in the pathotrain handoff.
