@@ -88,11 +88,11 @@ def test_train_transform_keeps_labels_and_tensors():
     pickle.loads(pickle.dumps(t))  # DataLoader workers
 
 
-def test_eval_transform_is_deterministic():
-    t = eval_transform(crop=48)
+def test_eval_transform_is_deterministic_and_keeps_the_whole_tile():
+    t = eval_transform()
     (a, ma), (b, mb) = t(TILE, MASK), t(TILE, MASK)
     assert torch.equal(a, b) and torch.equal(ma, mb)
-    assert torch.equal(ma, torch.from_numpy(MASK[8:56, 8:56]).long())
+    assert a.shape == (3, 64, 64) and torch.equal(ma, torch.from_numpy(MASK).long())
 
 
 def test_scanner_extras_change_tile_not_mask():

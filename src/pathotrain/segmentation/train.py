@@ -80,21 +80,25 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     )
 
 
+def task_kwargs(cfg: dict) -> dict:
+    """The ``task`` section, with ``window`` defaulting to ``augmentation.crop`` so
+    validation scores whole tiles from windows of the training size."""
+    return {"window": cfg.get("augmentation", {}).get("crop"), **cfg.get("task", {})}
+
+
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
     config_path = experiment.start(cfg, resume)
     model = segmentation.build_model(**cfg["model"])
-    task = segmentation.SegmentationTask(
-        model, cfg["model"]["num_classes"], loss=build_loss(cfg), **cfg.get("task", {})
-    )
     augmentation = cfg.get("augmentation", {})
+    task = segmentation.SegmentationTask(
+        model, cfg["model"]["num_classes"], loss=build_loss(cfg), **task_kwargs(cfg)
+    )
     train_set = build_dataset(cfg, "train", train_transform(mean=mean, std=std, **augmentation))
     val_set = None
     if "val" in cfg["data"]:
-        val_set = build_dataset(
-            cfg, "val", eval_transform(augmentation.get("crop"), mean=mean, std=std)
-        )
+        val_set = build_dataset(cfg, "val", eval_transform(mean=mean, std=std))
     return experiment.fit(cfg, task, train_set, val_set, config_path, resume)
 
 

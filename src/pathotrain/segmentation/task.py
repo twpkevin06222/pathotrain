@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
@@ -8,6 +10,50 @@ from torchmetrics.classification import MulticlassJaccardIndex
 from pathotrain.engine.schedules import warmup_cosine
 from pathotrain.engine.task import Task
 from pathotrain.segmentation.losses import CEDiceLoss
+
+
+def gaussian_window(height: int, width: int, device: torch.device | None = None) -> Tensor:
+    """``(height, width)`` Gaussian with sigma side / 8 and peak 1, zeros raised to the
+    smallest positive value; pathoinfer's ``stitch.segmentation.gaussian_window`` (as in
+    nnU-Net), so validation blends windows as inference does."""
+    lines = []
+    for size in (height, width):
+        offsets = torch.arange(size, device=device) - (size - 1) / 2
+        lines.append(torch.exp(-(offsets**2) / (2 * (size / 8) ** 2)))
+    window = torch.outer(*lines)
+    window /= window.max()
+    return window.clamp_min(window[window > 0].min())
+
+
+def _starts(length: int, size: int, overlap: float) -> list[int]:
+    """Window starts covering ``length``; the last window is shifted back to the edge."""
+    if length <= size:
+        return [0]
+    stride = max(1, round(size * (1 - overlap)))
+    count = math.ceil((length - size) / stride) + 1
+    return sorted({min(i * stride, length - size) for i in range(count)})
+
+
+def sliding_window(model: nn.Module, image: Tensor, size: int, overlap: float = 0.25) -> Tensor:
+    """Log-probabilities ``(B, C, H, W)`` of ``image`` from ``size x size`` windows that
+    overlap by ``overlap``, their softmax probabilities blended with Gaussian weights.
+
+    Log-probabilities stand in for logits: their softmax is the blended probabilities,
+    so losses and argmax work on them unchanged.
+    """
+    _, _, height, width = image.shape
+    h, w = min(size, height), min(size, width)
+    weight = gaussian_window(h, w, image.device)
+    probs = total = None
+    for y in _starts(height, h, overlap):
+        for x in _starts(width, w, overlap):
+            p = model(image[:, :, y : y + h, x : x + w]).float().softmax(1)
+            if probs is None:
+                probs = image.new_zeros((image.shape[0], p.shape[1], height, width), dtype=p.dtype)
+                total = image.new_zeros((height, width), dtype=p.dtype)
+            probs[:, :, y : y + h, x : x + w] += p * weight
+            total[y : y + h, x : x + w] += weight
+    return (probs / total).clamp_min(torch.finfo(probs.dtype).tiny).log()
 
 
 class SegmentationTask(Task):
@@ -29,6 +75,10 @@ class SegmentationTask(Task):
         weight_decay: AdamW weight decay.
         ignore_index: Mask value excluded from loss and metrics.
         class_names: Names for the IoU keys, default the class indices.
+        window: Training crop side. Validation tiles larger than this are scored
+            whole, from overlapping ``window`` windows blended as at inference
+            (see :func:`sliding_window`); None runs the model on the tile as is.
+        window_overlap: Overlap of those windows, as a fraction of ``window``.
     """
 
     def __init__(
@@ -41,8 +91,16 @@ class SegmentationTask(Task):
         ignore_index: int = 255,
         class_names: list[str] | None = None,
         warmup_epochs: float = 0,
+        window: int | None = None,
+        window_overlap: float = 0.25,
     ) -> None:
         super().__init__()
+        if window is not None and window < 1:
+            raise ValueError(f"window must be >= 1, got {window}")
+        if not 0.0 <= window_overlap < 1.0:
+            raise ValueError(f"window_overlap must be in [0, 1), got {window_overlap}")
+        self.window = window
+        self.window_overlap = window_overlap
         self.model = model
         self.loss = loss or CEDiceLoss(ignore_index)
         self.ignore_index = ignore_index
@@ -66,7 +124,10 @@ class SegmentationTask(Task):
 
     def validation_step(self, batch: tuple[Tensor, Tensor]) -> None:
         image, mask = batch
-        logits = self.model(image).float()
+        if self.window is not None and max(image.shape[-2:]) > self.window:
+            logits = sliding_window(self.model, image, self.window, self.window_overlap)
+        else:
+            logits = self.model(image).float()
         # Weight by labelled pixels, so the epoch value is the per-pixel mean.
         self.val_loss.update(self.loss(logits, mask), (mask != self.ignore_index).sum())
         self.iou.update(logits.argmax(1), mask)

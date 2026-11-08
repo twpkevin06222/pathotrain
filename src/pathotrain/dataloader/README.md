@@ -119,9 +119,11 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
 - Scanner artifacts (off by default): `blur`, `noise` and `jpeg` are the
   probabilities of slight defocus blur, sensor noise and JPEG compression, e.g.
   `train_transform(blur=0.2, noise=0.2, jpeg=0.2)`. They change the tile only.
-- `eval_transform`: optional centre crop and normalisation only.
+- `eval_transform`: normalisation only, on the whole tile.
 - `crop`: tile larger than you train on (e.g. `tile_size=576`) and pass
-  `crop=512` to both, for shift augmentation without border artefacts.
+  `crop=512` to `train_transform`, for shift augmentation without border artefacts.
+  Segmentation validation then scores whole tiles from overlapping 512 px windows
+  (`SegmentationTask(window=512)`); detection refuses `crop` when it evaluates.
 - Geometric operations fill uncovered mask pixels with 255, so use
   `CrossEntropyLoss(ignore_index=255)` with augmentation too.
 
