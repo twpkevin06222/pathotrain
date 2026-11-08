@@ -216,19 +216,21 @@ class ForegroundCrop(v2.Transform):
     centred on a random labelled pixel (mask value > 0 and not ``ignore_index``) or
     box centre, moved inside the tile; otherwise, or with no foreground, at a uniform
     position as ``v2.RandomCrop``. Oversamples foreground for sparse classes (about
-    a third of crops in nnU-Net).
+    a third of crops in nnU-Net). A side shorter than ``size`` is first padded on both
+    ends by the shortfall, as ``v2.RandomCrop(pad_if_needed=True)``: the image with
+    ``fill``, the mask with ``ignore_index``.
     """
 
-    def __init__(self, size: int, p: float, ignore_index: int = 255) -> None:
+    def __init__(self, size: int, p: float, ignore_index: int = 255, fill: int = 128) -> None:
         super().__init__()
         if not 0.0 <= p <= 1.0:
             raise ValueError(f"foreground_crop is a probability in [0, 1], got {p}")
-        self.size, self.p, self.ignore_index = size, p, ignore_index
+        self.size, self.p, self.ignore_index, self.fill = size, p, ignore_index, fill
 
     def make_params(self, flat_inputs: list[Any]) -> dict[str, Any]:
         height, width = next(i for i in flat_inputs if isinstance(i, tv_tensors.Image)).shape[-2:]
-        if height < self.size or width < self.size:
-            raise ValueError(f"tile {height} x {width} is smaller than the crop {self.size}")
+        pad_y, pad_x = max(self.size - height, 0), max(self.size - width, 0)
+        height, width = height + 2 * pad_y, width + 2 * pad_x
         centres = None
         if torch.rand(()) < self.p:
             centres = self._foreground(flat_inputs)
@@ -237,9 +239,9 @@ class ForegroundCrop(v2.Transform):
             left = int(torch.randint(width - self.size + 1, ()))
         else:
             cy, cx = centres[int(torch.randint(len(centres), ()))].tolist()
-            top = min(max(round(cy) - self.size // 2, 0), height - self.size)
-            left = min(max(round(cx) - self.size // 2, 0), width - self.size)
-        return {"top": top, "left": left}
+            top = min(max(round(cy) + pad_y - self.size // 2, 0), height - self.size)
+            left = min(max(round(cx) + pad_x - self.size // 2, 0), width - self.size)
+        return {"top": top, "left": left, "padding": [pad_x, pad_y, pad_x, pad_y]}
 
     def _foreground(self, flat_inputs: list[Any]) -> torch.Tensor | None:
         """``(N, 2)`` candidate ``(y, x)`` centres, or None without a mask or boxes."""
@@ -252,6 +254,9 @@ class ForegroundCrop(v2.Transform):
         return None
 
     def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+        if any(params["padding"]):
+            fill = self.ignore_index if isinstance(inpt, tv_tensors.Mask) else self.fill
+            inpt = F.pad(inpt, params["padding"], fill=fill)
         return F.crop(inpt, params["top"], params["left"], self.size, self.size)
 
 
@@ -409,7 +414,8 @@ def train_transform(
         n, m: H&E RandAugment operations per tile and magnitude, see
             :func:`he_randaugment`; ``n=0`` turns it off.
         crop: Random ``crop x crop`` window; tile larger than this for shift
-            augmentation. Validation keeps whole tiles; segmentation scores them
+            augmentation. A tile side shorter than ``crop`` is padded (``fill`` in the
+            tile, ``mask_fill`` in the mask, so the padding is never scored). Validation keeps whole tiles; segmentation scores them
             from ``crop`` windows (``SegmentationTask(window=crop)``).
         mean, std: Normalisation, in ``[0, 1]`` units (ImageNet by default).
         fill, mask_fill: Tile and mask value for pixels uncovered by geometric ops.
@@ -428,9 +434,12 @@ def train_transform(
     if foreground_crop and not crop:
         raise ValueError("foreground_crop needs crop, the size of the window to place")
     if crop and foreground_crop:
-        transforms = [ForegroundCrop(crop, foreground_crop, ignore_index=mask_fill)]
+        transforms = [ForegroundCrop(crop, foreground_crop, ignore_index=mask_fill, fill=fill)]
+    elif crop:
+        fills = {tv_tensors.Image: fill, tv_tensors.Mask: mask_fill}
+        transforms = [v2.RandomCrop(crop, pad_if_needed=True, fill=fills)]
     else:
-        transforms = [v2.RandomCrop(crop)] if crop else []
+        transforms = []
     transforms += [v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), RandomRot90()]
     if n:
         transforms.append(he_randaugment(n, m, fill, mask_fill))
