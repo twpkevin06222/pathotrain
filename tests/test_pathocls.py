@@ -163,3 +163,30 @@ def test_mlp_head_trains_reloads_and_exports(tmp_path, backbone):
     pytest.importorskip("onnxruntime")
     (tmp_path / "out").mkdir()
     export(best, tmp_path / "out/m.onnx", mpp=0.5, icc=True)  # checks ORT vs torch
+
+
+def test_timm_backbone_from_scratch_trains_reloads_and_exports(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone)
+    cfg["model"] = {"name": "timm:test_resnet", "pretrained": False, "freeze": False}
+    cfg["task"]["backbone_lr"] = 1e-2  # from scratch: as fast as the head
+    cfg["trainer"]["max_epochs"] = 3
+    train(cfg)
+    last = tmp_path / "run/checkpoints/last.ckpt"
+    state = torch.load(last, weights_only=True)["model"]
+    classifier, _ = load_model(last)
+    weights = classifier.state_dict()
+    assert all(torch.equal(weights[k], v) for k, v in state.items())  # backbone and head
+    assert classifier.head.linear.in_features == 96  # timm's pooled feature width
+    assert "val/balanced_acc" in evaluate(last, "val")
+    pytest.importorskip("onnxruntime")
+    (tmp_path / "out").mkdir()
+    export(last, tmp_path / "out/m.onnx", mpp=0.5, icc=True)  # checks ORT vs torch
+    card = json.loads((tmp_path / "out/model_card.json").read_text())
+    assert card["input"]["tile_size"] == 160  # timm's pretrained config input size
+
+
+def test_a_backbone_from_scratch_cannot_be_frozen(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone)
+    cfg["model"] = {"name": "timm:test_resnet", "pretrained": False}
+    with pytest.raises(ValueError, match="freeze: false"):
+        train(cfg)

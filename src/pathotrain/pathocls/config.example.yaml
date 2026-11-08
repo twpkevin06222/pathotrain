@@ -6,9 +6,12 @@ output_dir: runs/cls01      # config.yaml, checkpoints/, logs/, train.log
 
 model:
   name: midnight-12k        # a pathofm model (midnight-12k, spectra-midnight-12k,
-                            # openmidnight-1.1), a histossl .ckpt or export folder;
+                            # openmidnight-1.1), a histossl .ckpt or export folder,
+                            # or timm:<name> (e.g. timm:convnext_tiny.in12k_ft_in1k);
                             # frozen and without augmentation, its tile embedding
-                            # (CLS + mean patch token) is computed once per tile
+                            # (CLS + mean patch token; timm: pooled features) is
+                            # computed once per tile
+  # pretrained: false       # timm only: train from scratch (needs freeze: false)
   # num_classes: 9          # optional check; filled in from the classes found
   # freeze: false           # fine-tune the backbone (online, at task.backbone_lr)
   # head:                   # default linear; with hidden, an MLP (one GELU layer)

@@ -3,7 +3,7 @@
 import torch
 from torch import Tensor, nn
 
-from pathotrain.pathofm import classification_embedding
+from pathotrain.pathocls.backbones import embedding
 
 
 class Head(nn.Module):
@@ -32,23 +32,18 @@ class Head(nn.Module):
 
 
 class Classifier(nn.Module):
-    """``image -> logits``: ``head`` on ``backbone``'s tile embedding (CLS token and
-    mean patch token, :func:`~pathotrain.pathofm.classification_embedding`)."""
+    """``image -> logits``: ``head`` on ``backbone``'s tile embedding
+    (:func:`~pathotrain.pathocls.backbones.embedding`)."""
 
     def __init__(self, backbone: nn.Module, head: Head) -> None:
         super().__init__()
         self.backbone, self.head = backbone, head
 
     def forward(self, image: Tensor) -> Tensor:
-        return self.head(classification_embedding(self.backbone, image))
+        return self.head(embedding(self.backbone, image))
 
     def train(self, mode: bool = True) -> "Classifier":
         super().train(mode)
         if not any(p.requires_grad for p in self.backbone.parameters()):
             self.backbone.eval()  # frozen: no dropout or drop path, as when embedding
         return self
-
-
-def embedding_dim(backbone: nn.Module) -> int:
-    """Width of ``backbone``'s tile embedding: CLS and mean patch token side by side."""
-    return 2 * backbone.config.hidden_size
