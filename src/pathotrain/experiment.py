@@ -245,6 +245,22 @@ def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
     return loader
 
 
+def check_foreground_crop(cfg: dict) -> None:
+    """Refuse ``augmentation.foreground_crop`` when the training split is tiled from
+    slides: their tiles are already selected for ground truth (``object_mask_overlap``,
+    ``min_objects``), and pulling crops towards it as well would under-represent
+    unlabelled tissue and undo ``negative_sampling``.
+
+    Raises:
+        ValueError: ``foreground_crop`` is set and ``data.train`` has ``slides``.
+    """
+    if cfg.get("augmentation", {}).get("foreground_crop") and "slides" in cfg["data"]["train"]:
+        raise ValueError(
+            "augmentation.foreground_crop is for tile folders; the slide training split "
+            "already selects tiles by ground truth (use sampling or object_mask_overlap)"
+        )
+
+
 def input_size(cfg: dict) -> int | None:
     """The side of the tiles the model trained on: ``augmentation.crop``, else the
     train split's ``tile_size``; None for tile folders without a crop."""

@@ -59,6 +59,7 @@ augmentation:
   n: 3                      # H&E RandAugment ops per tile; 0 turns it off
   m: 5                      # their magnitude
   crop: null                # random crop size; prefer tiling at the training size
+  foreground_crop: 0.0      # tile folders only: share of crops centred on a label
   blur: 0.0                 # probability of scanner-like blur, noise, JPEG
   noise: 0.0
   jpeg: 0.0

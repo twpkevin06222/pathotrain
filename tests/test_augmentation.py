@@ -119,3 +119,58 @@ def test_jpeg_matches_pil():
     Image.fromarray(TILE).save(buffer, "JPEG", quality=60)
     ref = np.array(Image.open(buffer))
     assert np.array_equal(as_hwc(RandomJPEG((60, 60))(IMAGE)), ref)
+
+
+def _sparse_tile():
+    """128 px tile: a 10 px labelled patch in one corner, an ignored band in another."""
+    tile = RNG.integers(40, 230, (128, 128, 3), dtype=np.uint8)
+    mask = np.zeros((128, 128), np.uint8)
+    mask[100:110, 100:110] = 1
+    mask[:40, :] = 255
+    return tile, mask
+
+
+def test_foreground_crop_centres_on_labels_when_asked():
+    tile, mask = _sparse_tile()
+    torch.manual_seed(0)
+    always = train_transform(n=0, crop=32, foreground_crop=1.0)
+    never = train_transform(n=0, crop=32, foreground_crop=0.0)
+    pickle.loads(pickle.dumps(always))  # DataLoader workers
+    hits = [(always(tile, mask)[1] == 1).any().item() for _ in range(50)]
+    assert all(hits)
+    uniform = np.mean([(never(tile, mask)[1] == 1).any().item() for _ in range(200)])
+    assert uniform < 0.3  # a uniform 32 px window rarely finds the 10 px patch
+    # Ignored pixels are not foreground: without labels the crop falls back to uniform.
+    only_ignored = np.where(mask == 255, 255, 0).astype(np.uint8)
+    assert always(tile, only_ignored)[1].shape == (32, 32)
+
+
+def test_foreground_crop_keeps_a_box_in_detection_crops():
+    tile, _ = _sparse_tile()
+    target = {"boxes": np.array([[100, 100, 10, 10]], np.float32), "labels": np.array([1])}
+    t = train_transform(n=0, crop=32, foreground_crop=1.0, boxes=True)
+    torch.manual_seed(0)
+    for _ in range(30):
+        image, out = t(tile, target)
+        assert image.shape == (3, 32, 32) and out["labels"].tolist() == [1]
+        assert (out["boxes"] >= 0).all() and (out["boxes"] <= 32).all()
+
+
+def test_foreground_crop_validation():
+    tile, mask = _sparse_tile()
+    with pytest.raises(ValueError, match="needs crop"):
+        train_transform(foreground_crop=0.3)
+    with pytest.raises(ValueError, match="probability"):
+        train_transform(crop=32, foreground_crop=1.5)
+    with pytest.raises(ValueError, match="smaller than the crop"):
+        train_transform(n=0, crop=256, foreground_crop=0.5)(tile, mask)
+
+
+def test_foreground_crop_is_refused_for_slide_training_splits():
+    from pathotrain.experiment import check_foreground_crop
+
+    folder = {"augmentation": {"foreground_crop": 0.3}, "data": {"train": {"root": "tiles"}}}
+    check_foreground_crop(folder)
+    check_foreground_crop({"data": {"train": {"slides": ["s"]}}})
+    with pytest.raises(ValueError, match="tile folders"):
+        check_foreground_crop({**folder, "data": {"train": {"slides": ["s"]}}})

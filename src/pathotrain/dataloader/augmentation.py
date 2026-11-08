@@ -211,6 +211,50 @@ class RandomRot90(v2.Transform):
         return tv_tensors.wrap(torch.rot90(inpt, params["k"], dims=(-2, -1)), like=inpt)
 
 
+class ForegroundCrop(v2.Transform):
+    """``size x size`` crop of image, mask and boxes that, with probability ``p``, is
+    centred on a random labelled pixel (mask value > 0 and not ``ignore_index``) or
+    box centre, moved inside the tile; otherwise, or with no foreground, at a uniform
+    position as ``v2.RandomCrop``. Oversamples foreground for sparse classes (about
+    a third of crops in nnU-Net).
+    """
+
+    def __init__(self, size: int, p: float, ignore_index: int = 255) -> None:
+        super().__init__()
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"foreground_crop is a probability in [0, 1], got {p}")
+        self.size, self.p, self.ignore_index = size, p, ignore_index
+
+    def make_params(self, flat_inputs: list[Any]) -> dict[str, Any]:
+        height, width = next(i for i in flat_inputs if isinstance(i, tv_tensors.Image)).shape[-2:]
+        if height < self.size or width < self.size:
+            raise ValueError(f"tile {height} x {width} is smaller than the crop {self.size}")
+        centres = None
+        if torch.rand(()) < self.p:
+            centres = self._foreground(flat_inputs)
+        if centres is None or len(centres) == 0:
+            top = int(torch.randint(height - self.size + 1, ()))
+            left = int(torch.randint(width - self.size + 1, ()))
+        else:
+            cy, cx = centres[int(torch.randint(len(centres), ()))].tolist()
+            top = min(max(round(cy) - self.size // 2, 0), height - self.size)
+            left = min(max(round(cx) - self.size // 2, 0), width - self.size)
+        return {"top": top, "left": left}
+
+    def _foreground(self, flat_inputs: list[Any]) -> torch.Tensor | None:
+        """``(N, 2)`` candidate ``(y, x)`` centres, or None without a mask or boxes."""
+        for inpt in flat_inputs:
+            if isinstance(inpt, tv_tensors.Mask):
+                return ((inpt > 0) & (inpt != self.ignore_index)).nonzero()[:, -2:].float()
+            if isinstance(inpt, tv_tensors.BoundingBoxes):
+                xyxy = F.convert_bounding_box_format(inpt, new_format="XYXY")
+                return torch.stack([xyxy[:, 1] + xyxy[:, 3], xyxy[:, 0] + xyxy[:, 2]], 1) / 2
+        return None
+
+    def transform(self, inpt: Any, params: dict[str, Any]) -> Any:
+        return F.crop(inpt, params["top"], params["left"], self.size, self.size)
+
+
 class RandomTranslate(v2.Transform):
     """Shift image and mask along one axis by up to ``limit`` pixels."""
 
@@ -356,6 +400,7 @@ def train_transform(
     noise: float = 0.0,
     jpeg: float = 0.0,
     boxes: bool = False,
+    foreground_crop: float = 0.0,
 ) -> SegmentationTransform | DetectionTransform:
     """Random crop (if ``crop``), flips and 90 degree rotations, H&E RandAugment,
     optional scanner artifacts, normalisation.
@@ -375,8 +420,17 @@ def train_transform(
         boxes: Detection targets instead of masks (a :class:`DetectionTransform`).
             A crop clips the boxes it cuts; ``min_box_visibility`` is not applied
             again, so tile at the training size rather than cropping where you can.
+        foreground_crop: Probability that the crop is centred on foreground (a
+            labelled pixel, not ``mask_fill``, or a box centre) instead of placed
+            uniformly, see :class:`ForegroundCrop`; needs ``crop``. For tile folders,
+            whose tiles were not selected for ground truth; 0 (default) turns it off.
     """
-    transforms = [v2.RandomCrop(crop)] if crop else []
+    if foreground_crop and not crop:
+        raise ValueError("foreground_crop needs crop, the size of the window to place")
+    if crop and foreground_crop:
+        transforms = [ForegroundCrop(crop, foreground_crop, ignore_index=mask_fill)]
+    else:
+        transforms = [v2.RandomCrop(crop)] if crop else []
     transforms += [v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), RandomRot90()]
     if n:
         transforms.append(he_randaugment(n, m, fill, mask_fill))

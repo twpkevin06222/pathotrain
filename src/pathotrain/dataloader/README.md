@@ -132,6 +132,10 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
   `crop=512` to `train_transform`, for shift augmentation without border artefacts.
   Segmentation validation then scores whole tiles from overlapping 512 px windows
   (`SegmentationTask(window=512)`); detection refuses `crop` when it evaluates.
+- `foreground_crop`: with `crop`, the probability that the window is centred on a
+  labelled pixel or box centre rather than placed uniformly (e.g. `0.33`, as
+  nnU-Net), for sparse classes in tile folders. Training refuses it for slide
+  splits, whose tiles are already selected for ground truth.
 - Geometric operations fill uncovered mask pixels with 255, so use
   `CrossEntropyLoss(ignore_index=255)` with augmentation too.
 
