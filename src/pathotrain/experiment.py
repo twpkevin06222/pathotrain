@@ -115,10 +115,10 @@ def fit(
     train_sampler: Sampler | None = None,
     **loader_kwargs,
 ) -> dict[str, float]:
-    """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping`` and
-    ``loader`` sections of ``cfg`` say, logging to MLflow and CSV. MLflow writes
-    to ``cfg["mlflow_db"]`` (artifacts in ``mlruns/`` beside it) when set, else to
-    ``MLFLOW_TRACKING_URI``.
+    """Train ``task`` as the ``trainer``, ``checkpoint``, ``early_stopping``,
+    ``loader`` and ``val_loader`` sections of ``cfg`` say, logging to MLflow and CSV.
+    MLflow writes to ``cfg["mlflow_db"]`` (artifacts in ``mlruns/`` beside it) when
+    set, else to ``MLFLOW_TRACKING_URI``.
 
     ``monitor`` (and its ``mode``) is the checkpoint and early-stopping default, ``trainer_defaults``
     the TrainerConfig defaults and ``loader_kwargs`` the DataLoader defaults
@@ -145,7 +145,11 @@ def fit(
         loggers=[mlflow_logger, CSVLogger(out, name="logs")],
     )
     loader = _loader_kwargs(cfg, loader_kwargs)
-    val_loader = None if val_set is None else DataLoader(val_set, **loader)
+    val_loader = (
+        None
+        if val_set is None
+        else DataLoader(val_set, **_loader_kwargs(cfg, loader_kwargs, val=True))
+    )
     return trainer.fit(
         task,
         # Training workers persist (no per-epoch restart); val ones don't, so the two sets
@@ -166,12 +170,13 @@ def evaluate(
 ) -> dict[str, float]:
     """Score ``task`` (holding trained weights) on ``dataset`` and return its metrics
     keyed ``<split>/...``. Runs on one device, with ``cfg``'s accelerator, precision
-    and ``loader`` section; ``loader_kwargs`` are DataLoader defaults, as for :func:`fit`."""
+    and ``loader`` section updated by ``val_loader``; ``loader_kwargs`` are DataLoader
+    defaults, as for :func:`fit`."""
     trainer = cfg.get("trainer", {})
     config = {k: trainer[k] for k in ("accelerator", "precision") if k in trainer}
     # One device: DDP pads the last batch with repeated tiles (see Trainer.validate).
     metrics = Trainer(TrainerConfig(**config, devices=1)).evaluate(
-        task, DataLoader(dataset, **_loader_kwargs(cfg, loader_kwargs))
+        task, DataLoader(dataset, **_loader_kwargs(cfg, loader_kwargs, val=True))
     )
     return {f"{split}/{k.removeprefix('val/')}": v for k, v in metrics.items()}
 
@@ -228,9 +233,10 @@ def register_onnx(
     return version
 
 
-def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
+def _loader_kwargs(cfg: dict, defaults: dict, val: bool = False) -> dict:
     """DataLoader keyword arguments: pathotrain's defaults, then ``defaults``, then
-    the config's ``loader`` section."""
+    the config's ``loader`` section, then for validation and eval (``val``) its
+    ``val_loader`` section, e.g. a larger ``batch_size`` (no gradients to hold)."""
     loader = {
         # Pinned batches let the non-blocking copy to the GPU overlap compute (~2x faster).
         "pin_memory": torch.cuda.is_available(),
@@ -238,6 +244,7 @@ def _loader_kwargs(cfg: dict, defaults: dict) -> dict:
         "multiprocessing_context": "forkserver",
         **defaults,
         **cfg.get("loader", {}),
+        **(cfg.get("val_loader") or {} if val else {}),
     }
     if not loader.get("num_workers"):  # DataLoader refuses these without workers
         loader.pop("multiprocessing_context", None)

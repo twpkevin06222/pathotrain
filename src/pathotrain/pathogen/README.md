@@ -82,7 +82,7 @@ python -m pathotrain.pathogen.eval runs/ldm01/checkpoints/best.ckpt --split val 
   `test/ssim`, and `test/loss`, the model's loss with fixed noise. Prints JSON;
   `evaluate(checkpoint, split, config, steps)` returns the dict.
 - The model, its EMA weights and the task settings come from the checkpoint;
-  `data`, `loader` and `trainer` too, unless `--config` gives them. Tiles are
+  `data`, `loader`, `val_loader` and `trainer` too, unless `--config` gives them. Tiles are
   prepared as for validation (`data.crop` centre crop). Runs on one device.
 - `--steps` sets the sampling steps (default the task's `sample_steps`).
 - With `mlflow_db` in the config (the checkpoint's or `--config`'s) or

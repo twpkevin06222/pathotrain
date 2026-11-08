@@ -215,6 +215,9 @@ paired by file stem. Tiles of different sizes need `augmentation.crop`.
 - Loader workers start with `forkserver` (forking the threaded training process can
   deadlock them; FastSlide refuses forked workers). `multiprocessing_context: fork`
   under `loader` starts them faster.
+- `val_loader` updates `loader`'s settings for validation and eval, e.g.
+  `val_loader: {batch_size: 32}` (no gradients, so a larger batch fits; scores don't
+  change) or `{batch_size: 1}` for val/test images of mixed sizes.
 
 ### Evaluation
 
@@ -227,7 +230,7 @@ python -m pathotrain.segmentation.eval runs/exp01/checkpoints/best.ckpt --split 
 ```
 
 - The model, normalisation and task settings come from the checkpoint; `data`,
-  `loader` and `trainer` too, unless `--config` gives them.
+  `loader`, `val_loader` and `trainer` too, unless `--config` gives them.
 - Prints the metrics as JSON keyed by the split (`test/miou`, `test/iou_<class>`,
   `test/loss`). Runs on one device. `evaluate(checkpoint, split, config)` returns them.
 - With `mlflow_db` in the config (the checkpoint's or `--config`'s) or

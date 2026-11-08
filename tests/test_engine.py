@@ -401,3 +401,36 @@ def test_throughput_without_a_peak_has_no_mfu():
 
     out = throughput(2e12, steps=10, seconds=4.0)
     assert out == {"system/step_tflop": 2.0, "system/achieved_tflops": 5.0}
+
+
+def test_val_loader_overrides_loader_for_validation_and_eval_only(tmp_path, tracking, monkeypatch):
+    from pathotrain import experiment
+
+    sizes = {}
+    real = experiment.DataLoader
+
+    def recording(dataset, **kwargs):
+        sizes.setdefault("train" if "shuffle" in kwargs else "val", kwargs["batch_size"])
+        return real(dataset, **kwargs)
+
+    monkeypatch.setattr(experiment, "DataLoader", recording)
+    config = tmp_path / "config.yaml"
+    config.write_text("name: exp")
+    cfg = {
+        "name": "exp",
+        "output_dir": str(tmp_path / "run"),
+        "trainer": {"max_epochs": 1, **CPU},
+        "loader": {"batch_size": 4},
+    }
+    data = _loader().dataset
+    experiment.fit(cfg, _task(), data, data, config)
+    assert sizes == {"train": 4, "val": 4}  # unset val_loader: loader for both
+
+    sizes.clear()
+    cfg |= {"output_dir": str(tmp_path / "run2"), "val_loader": {"batch_size": 8}}
+    experiment.fit(cfg, _task(), data, data, config)
+    assert sizes == {"train": 4, "val": 8}
+
+    sizes.clear()
+    experiment.evaluate(cfg, _task(), data, "test")
+    assert sizes == {"val": 8}
