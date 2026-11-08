@@ -1,4 +1,4 @@
-# Tile classification (linear probe): python -m pathotrain.pathocls.train config.yaml
+# Tile classification (linear probe, or fine-tuning): python -m pathotrain.pathocls.train config.yaml
 name: cls01                 # MLflow experiment
 seed: 0
 output_dir: runs/cls01      # config.yaml, checkpoints/, logs/, train.log
@@ -7,18 +7,30 @@ output_dir: runs/cls01      # config.yaml, checkpoints/, logs/, train.log
 model:
   name: midnight-12k        # a pathofm model (midnight-12k, spectra-midnight-12k,
                             # openmidnight-1.1), a histossl .ckpt or export folder;
-                            # frozen, its tile embedding (CLS + mean patch token) is
-                            # computed once per tile
+                            # frozen and without augmentation, its tile embedding
+                            # (CLS + mean patch token) is computed once per tile
   # num_classes: 9          # optional check; filled in from the classes found
+  # freeze: false           # fine-tune the backbone (online, at task.backbone_lr)
+  # head:                   # default linear; with hidden, an MLP (one GELU layer)
+  #   hidden: 512
+  #   dropout: 0.1          # before the output layer
 
-task:                       # ClassificationTask: the linear head, on standardised embeddings
+task:                       # ClassificationTask: the head, on standardised embeddings
   lr: 1.0e-3
   weight_decay: 1.0e-4
   warmup_epochs: 0
+  # backbone_lr: 1.0e-5     # fine-tuning only; default lr / 10
   # class_names: [ADI, BACK, DEB, LYM, MUC, MUS, NORM, STR, TUM]  # label order;
   #                         # default the train split's labels, sorted
 
-features:                   # the one embedding pass over each split
+# augmentation:             # trains online: the backbone runs on augmented tiles every
+#   n: 2                    # step (tens of seconds per epoch, not milliseconds).
+#   m: 3                    # train_transform: H&E RandAugment ops and magnitude, plus
+#   blur: 0.0               # random crop to the input size, flips, 90 degree rotations
+#   noise: 0.0
+#   jpeg: 0.0
+
+features:                   # embedding passes (each split, or online a train sample)
   batch_size: 64
   num_workers: 4
 
@@ -26,14 +38,14 @@ trainer:
   max_epochs: 50            # epochs over the cached embeddings: seconds each
   accelerator: auto
   devices: 1
-  precision: 32-true
+  precision: 32-true        # bf16-mixed on GPU when training online
 
 # checkpoint: {monitor: val/balanced_acc, mode: max}  # the defaults
 # early_stopping: {patience: 10}
 
 loader:                     # head training on the cached embeddings
-  batch_size: 256
-  num_workers: 0            # embeddings are in memory; workers only add start-up time
+  batch_size: 256           # online: tiles, e.g. 64 frozen, 32 fine-tuning
+  num_workers: 0            # embeddings are in memory; online, 8 to decode tiles
 
 data:
   train: {root: data/crc/train}         # class folders: root/<class>/*.png
