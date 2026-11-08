@@ -24,13 +24,15 @@ uploaded to the MLflow run and logged as flat params; checkpoints store it too
                                 # see pathotrain.dataloader.sampling
     loader?: {...}              # both DataLoaders, as for segmentation; collate_fn is set
     data:
-      train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
+      train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}, ...}
       val?: {slides: [...], annotations: [...], tiling: {...}}
       test?: {...}              # as val; scored only by the eval command
                                 # or a COCO folder per split: {root: dir} from
                                 # export_detection_tiles (DetectionTileFolderDataset)
       ...                       # the rest goes to DetectionTileGenerator for the slide
-                                # splits (class_map, roi_class, min_box_visibility, ...)
+                                # splits (class_map, roi_class, min_box_visibility, ...);
+                                # the same keys in a split override them for it,
+                                # e.g. train: {..., min_objects: 0}
 """
 
 import argparse
@@ -59,6 +61,7 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
         num_classes = len(dataset.class_names)
     else:
         data = {k: v for k, v in cfg["data"].items() if k not in ("train", "val", "test", split)}
+        data |= {k: v for k, v in s.items() if k not in ("slides", "annotations", "tiling")}
         dataset = DetectionDataset(
             s["slides"],
             s["annotations"],
