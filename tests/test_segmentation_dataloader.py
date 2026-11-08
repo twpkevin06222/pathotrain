@@ -78,6 +78,7 @@ def test_tile_folder_pairs_image_and_mask_dirs_by_stem(tmp_path):
     image, mask = ds[0]
     assert image.shape == (3, 4, 6) and image.dtype == torch.float32
     assert mask.shape == (4, 6) and mask.dtype == torch.int64 and mask.max() == 2
+    assert ds.image_area.tolist() == [4 * 6]
 
     for bad in ({}, {"root": tmp_path, "images": images}, {"images": images}):
         with pytest.raises(ValueError, match="either root"):

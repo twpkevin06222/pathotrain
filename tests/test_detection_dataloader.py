@@ -128,6 +128,7 @@ def test_export_writes_coco_and_folder_dataset_reads_it_back(exported):
     assert target["labels"].tolist() == [0, 1]
     assert ds[1][1]["boxes"].shape == (0, 4)
     assert ds.class_count.tolist() == [[1, 1], [0, 0]]  # one box of each class, then none
+    assert ds.image_area.tolist() == [128 * 96, 128 * 96]  # COCO width x height
 
     class Counted:
         def __init__(self, class_count):

@@ -59,3 +59,20 @@ def test_sampler_draws_are_seeded_and_favour_the_rare_class(monkeypatch):
     both = {"sampling": {"background": 0.1}, "data": {"negative_sampling": 0.2, "train": {}}}
     build_sampler(both, CONTENT)
     assert len(warnings) == 1 and "negative_sampling" in warnings[0]
+
+
+def test_by_area_draws_larger_images_in_proportion_and_sizes_the_epoch():
+    content = np.array([[1.0], [1.0], [0.0]])
+    area = np.array([512 * 512, 2 * 512 * 512, 512 * 512])  # the middle image is 2x larger
+    cfg = {"sampling": {"by_area": True}, "augmentation": {"crop": 512}, "data": {}}
+    torch.manual_seed(0)
+    sampler = build_sampler(
+        cfg | {"sampling": {"by_area": True, "num_samples": 40000}}, content, area
+    )
+    counts = np.bincount(list(sampler), minlength=3)
+    assert counts[1] / counts[0] == pytest.approx(2.0, rel=0.05)
+    assert len(build_sampler(cfg, content, area)) == 4  # 4 crops of image area
+    with pytest.raises(ValueError, match="by_area"):
+        build_sampler(cfg, content)  # slide datasets have no image_area
+    with pytest.raises(ValueError, match="by_area"):
+        build_sampler({**cfg, "augmentation": {}}, content, area)

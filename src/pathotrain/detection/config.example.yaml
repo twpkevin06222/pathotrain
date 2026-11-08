@@ -71,7 +71,10 @@ augmentation:
 #   max_ratio: 10           # cap on how much more a rare class is drawn than the commonest
 #   background: null        # share of draws from tiles without boxes (min_objects: 0);
 #                           # null keeps theirs
-#   num_samples: null       # draws per epoch; null = number of training tiles
+#   num_samples: null       # draws per epoch; null = number of training tiles (with
+#                           # by_area: total image area in crops)
+#   by_area: false          # tile folders of mixed sizes: weight each image by its area
+#                           # in augmentation.crop windows (2x the area, 2x the crops)
 
 # Optional; keyword arguments for both DataLoaders (collate_fn is set for you).
 loader:

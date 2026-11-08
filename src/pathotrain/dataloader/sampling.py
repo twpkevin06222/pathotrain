@@ -10,7 +10,11 @@ detection ones) into sampling weights; :func:`build_sampler` wraps them in a
       max_ratio: 10       # a class is drawn at most this many times more per unit of
                           # content than the most common class
       background: null    # share of draws from tiles without labels; null keeps theirs
-      num_samples: null   # draws per epoch; null = dataset size
+      num_samples: null   # draws per epoch; null = dataset size, or with by_area
+                          # the total image area in crops
+      by_area: false      # tile folders of mixed sizes: weight each image by its area
+                          # in augmentation.crop windows, so a 2x larger image gives
+                          # twice the crops per epoch
 
 Draws are with replacement and use torch's global generator, so the run's ``seed``
 (``seed_everything``) fixes them.
@@ -66,11 +70,20 @@ def tile_weights(
     return weights
 
 
-def build_sampler(cfg: dict, content: np.ndarray) -> WeightedRandomSampler:
+def build_sampler(
+    cfg: dict, content: np.ndarray, area: np.ndarray | None = None
+) -> WeightedRandomSampler:
     """A sampler over the training tiles from the ``sampling`` section of ``cfg`` (see the
-    module docstring) and the tiles' class ``content``, as for :func:`tile_weights`."""
+    module docstring) and the tiles' class ``content``, as for :func:`tile_weights`.
+    ``area`` is each tile's size in pixels, needed by ``by_area`` (tile folders'
+    ``image_area``).
+
+    Raises:
+        ValueError: ``by_area`` without ``area`` or without ``augmentation.crop``.
+    """
     options = dict(cfg["sampling"])
     num_samples = options.pop("num_samples", None)
+    by_area = options.pop("by_area", False)
     data = cfg.get("data", {})
     negatives = {**data, **data.get("train", {})}.get("negative_sampling", 0)
     if options.get("background") is not None and negatives:
@@ -79,6 +92,16 @@ def build_sampler(cfg: dict, content: np.ndarray) -> WeightedRandomSampler:
             "are then reweighted to the background share; use one of them"
         )
     weights = tile_weights(content, **options)
+    if by_area:
+        crop = cfg.get("augmentation", {}).get("crop")
+        if area is None or not crop:
+            raise ValueError(
+                "sampling.by_area needs a tile-folder training split (images of their own "
+                "sizes) and augmentation.crop (the window counted per image)"
+            )
+        crops = np.asarray(area, dtype=float) / crop**2
+        weights = weights * crops
+        num_samples = num_samples or max(1, round(crops.sum()))
     content = np.asarray(content, dtype=float)
     before = content.sum(axis=0) / max(content.sum(), 1e-12)
     after = weights @ content / max(weights @ content.sum(axis=1), 1e-12)

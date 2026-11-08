@@ -201,6 +201,11 @@ class SegmentationTileFolderDataset(Dataset):
         labelled = np.flatnonzero(fraction.any(axis=0))
         return fraction[:, : (labelled[-1] + 1 if labelled.size else 1)]
 
+    @functools.cached_property
+    def image_area(self) -> np.ndarray:
+        """``(tiles,)`` pixels per image, from the image headers, read once on first use."""
+        return np.array([np.prod(Image.open(image).size) for image, _ in self.pairs])
+
     def __getitem__(self, index: int) -> object:
         image, mask = self.pairs[index]
         tile = np.asarray(Image.open(image).convert("RGB"))

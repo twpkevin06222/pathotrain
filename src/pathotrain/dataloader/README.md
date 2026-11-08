@@ -90,6 +90,9 @@ dataset from `tiles.csv` (`class_<k>` columns), or else reads every mask once on
 first use. Detection datasets have `class_count[i, k]`, boxes per label.
 `pathotrain.dataloader.sampling` turns either into a class-weighted training
 sampler (the `sampling:` section of the segmentation and detection configs).
+For tile folders of mixed sizes, `sampling.by_area: true` also weights each image
+by its area (`image_area`, pixels) in `augmentation.crop` windows, and an epoch
+then defaults to the total area in crops.
 
 Both datasets take `transform(tile, mask)`, called with the `(H, W, 3)` uint8
 tile and `(H, W)` uint8 mask; its return value is the sample. Use it for
