@@ -73,10 +73,10 @@ class SegmentationTask(Task):
     """Semantic segmentation on ``(image, mask)`` batches, as produced by
     ``SegmentationDataset`` with ``train_transform`` / ``eval_transform``.
 
-    Logs the validation loss as ``val/loss``, per-class IoU as ``val/iou_<name>``
-    and their mean as ``val/miou``. A
-    class absent from both prediction and target over the whole validation set
-    has no IoU and is left out of the mean.
+    Logs the validation loss as ``val/loss``, per-class IoU as ``val/iou_<name>``,
+    their mean as ``val/miou`` and the mean without background (class 0, usually the
+    largest and easiest) as ``val/miou_fg``. A class absent from both prediction and
+    target over the whole validation set has no IoU and is left out of the means.
 
     Args:
         model: Network returning ``(B, num_classes, H, W)`` logits.
@@ -157,6 +157,7 @@ class SegmentationTask(Task):
         self.iou.reset()
         metrics = {f"val/iou_{n}": v.item() for n, v in zip(self.class_names, iou, strict=True)}
         metrics["val/miou"] = torch.nanmean(iou).item()
+        metrics["val/miou_fg"] = torch.nanmean(iou[1:]).item()
         metrics["val/loss"] = self.val_loss.compute().item()
         self.val_loss.reset()
         return metrics

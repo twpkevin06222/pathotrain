@@ -8,7 +8,3 @@ os.environ.setdefault("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "1")
 
 # INFO by default; export PATHOTRAIN_LOG_LEVEL=DEBUG (or ALL) for more, see patchology.log.
 configure_logging("pathotrain")
-
-
-def hello() -> str:
-    return "Hello from pathotrain!"

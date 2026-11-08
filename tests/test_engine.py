@@ -71,7 +71,14 @@ def test_fit_logs_checkpoints_and_resumes(tmp_path, tracking):
     )
     metrics = trainer.fit(_task(), _loader(), _loader(), hparams={"arch": "smp:unet"})
 
-    assert set(metrics) == {"val/iou_background", "val/iou_tumor", "val/miou", "val/loss"}
+    assert set(metrics) == {
+        "val/iou_background",
+        "val/iou_tumor",
+        "val/miou",
+        "val/miou_fg",
+        "val/loss",
+    }
+    assert metrics["val/miou_fg"] == metrics["val/iou_tumor"]  # background left out
     assert trainer.step == 3 * 2  # 4 batches, 2 per optimizer step
 
     best = torch.load(tmp_path / "best.ckpt", weights_only=False)

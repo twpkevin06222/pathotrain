@@ -130,9 +130,16 @@ def export_detection_tiles(
     layout: name the splits ``train``, ``valid`` and ``test`` to train with
     RF-DETR's own trainer or other COCO tools as well. Keyword arguments are as
     for :class:`DetectionDataset`.
+
+    Raises:
+        FileExistsError: ``out_dir/split`` is not empty (a re-export would leave the
+            old tiles beside the new index).
     """
     _check_class_map(class_map)
     root = Path(out_dir) / split
+    if root.is_dir() and any(root.iterdir()):
+        # A second export would replace the index but leave the first one's tiles behind.
+        raise FileExistsError(f"{root} is not empty; delete it or export to another split")
     root.mkdir(parents=True, exist_ok=True)
     images, annotations = [], []
     for slide, ground_truth in find_pairs(slide_dirs, annotation_dirs):

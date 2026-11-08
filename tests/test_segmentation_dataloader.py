@@ -144,3 +144,5 @@ def test_class_fraction_agrees_across_slides_export_and_mask_scan(tmp_path, monk
     np.testing.assert_allclose(from_csv.class_fraction, expected)
     scanned = SegmentationTileFolderDataset(images=root / "images", masks=root / "masks")
     np.testing.assert_allclose(scanned.class_fraction, expected)
+    with pytest.raises(FileExistsError, match="not empty"):  # would leave stale tiles
+        export_segmentation_tiles([tmp_path / "slides"], [tmp_path / "ann"], root.parent, "train")
