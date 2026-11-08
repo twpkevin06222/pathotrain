@@ -83,6 +83,13 @@ in the transform, e.g. `train_transform(crop=512)`. A side shorter than the crop
 is padded first: grey (`fill`) in the image, `mask_fill` (255, ignored) in the mask,
 so the padding never counts in the loss or IoU.
 
+Every image in a tile folder must have the same resolution (um per pixel): a
+512 px crop covers 256 um at 0.5 um/px but 128 um at 0.25 um/px, so mixed
+resolutions change the apparent size of the tissue. Slide datasets resample every
+slide to `tile_mpp`, and an export from one config is uniform, but a folder of
+tiles from elsewhere carries no resolution, so pathotrain cannot check it. Resample
+such images to one um/px (the one you will infer at) before training.
+
 Class content per tile, e.g. to weight sampling: `class_fraction[i, k]` is the
 share of tile `i`'s pixels with label `k` (column 0 background, `ignore_index`
 pixels in no column). `SegmentationDataset` takes it from patchology, the folder

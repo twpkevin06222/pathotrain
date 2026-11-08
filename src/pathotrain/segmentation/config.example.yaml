@@ -121,4 +121,5 @@ data:
   # Or tiles already on disk, per split (the options above then do not apply):
   #   train: {root: tiles/train}                         # written by export_segmentation_tiles
   #   train: {images: tumor/images, masks: tumor/masks}    # paired by file stem
-  # Tiles of different sizes need augmentation.crop to be batched.
+  # Tiles of different sizes need augmentation.crop to be batched. All tiles in a folder
+  # must share one um/px (unchecked: folders carry no resolution); resample them first.
