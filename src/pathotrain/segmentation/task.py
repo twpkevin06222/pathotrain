@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -32,6 +33,18 @@ def _starts(length: int, size: int, overlap: float) -> list[int]:
     stride = max(1, round(size * (1 - overlap)))
     count = math.ceil((length - size) / stride) + 1
     return sorted({min(i * stride, length - size) for i in range(count)})
+
+
+def input_multiple(model: nn.Module) -> int:
+    """The number ``model``'s input sides must be divisible by: an SMP encoder's
+    output stride (32; the U-Net and DeepLabV3+ decoders cope without, FPN, U-Net++
+    and others refuse), nnU-Net's total downsampling (64 with 7 stages), else 1."""
+    encoder = getattr(model, "encoder", None)
+    if hasattr(encoder, "output_stride"):
+        return encoder.output_stride
+    if hasattr(encoder, "strides"):  # nnU-Net: a stride per stage, per axis
+        return math.prod(s if isinstance(s, int) else s[0] for s in encoder.strides)
+    return 1
 
 
 def sliding_window(model: nn.Module, image: Tensor, size: int, overlap: float = 0.25) -> Tensor:
@@ -78,6 +91,9 @@ class SegmentationTask(Task):
         window: Training crop side. Validation tiles larger than this are scored
             whole, from overlapping ``window`` windows blended as at inference
             (see :func:`sliding_window`); None runs the model on the tile as is.
+            Either way a validation tile whose side the model cannot take (see
+            :func:`input_multiple`) is zero-padded (the normalised mean colour) at
+            the bottom and right, and the logits cropped back, so it is scored as is.
         window_overlap: Overlap of those windows, as a fraction of ``window``.
     """
 
@@ -124,10 +140,14 @@ class SegmentationTask(Task):
 
     def validation_step(self, batch: tuple[Tensor, Tensor]) -> None:
         image, mask = batch
+        height, width = image.shape[-2:]
+        multiple = input_multiple(self.model)
+        image = F.pad(image, (0, -width % multiple, 0, -height % multiple))
         if self.window is not None and max(image.shape[-2:]) > self.window:
             logits = sliding_window(self.model, image, self.window, self.window_overlap)
         else:
             logits = self.model(image).float()
+        logits = logits[..., :height, :width]
         # Weight by labelled pixels, so the epoch value is the per-pixel mean.
         self.val_loss.update(self.loss(logits, mask), (mask != self.ignore_index).sum())
         self.iou.update(logits.argmax(1), mask)

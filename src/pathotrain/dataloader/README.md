@@ -134,6 +134,8 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
   `crop=512` to `train_transform`, for shift augmentation without border artefacts.
   Segmentation validation then scores whole tiles from overlapping 512 px windows
   (`SegmentationTask(window=512)`); detection refuses `crop` when it evaluates.
+  A validation tile whose sides the model cannot take (FPN, U-Net++ and others need
+  multiples of 32, nnU-Net of 64) is padded for the forward pass and scored as is.
 - `foreground_crop`: with `crop`, the probability that the window is centred on a
   labelled pixel or box centre rather than placed uniformly (e.g. `0.33`, as
   nnU-Net), for sparse classes in tile folders. Training refuses it for slide
