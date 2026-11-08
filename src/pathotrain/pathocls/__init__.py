@@ -1,7 +1,7 @@
-"""Tile classification: a linear head on a frozen foundation-model backbone, trained on
-its cached tile embeddings (a linear probe as a trainable, exportable model)."""
+"""Tile classification: a linear or MLP head on a foundation-model backbone's tile
+embedding; the backbone frozen (a probe as a trainable, exportable model) or fine-tuned."""
 
-from pathotrain.pathocls.model import Classifier, LinearHead, embedding_dim
+from pathotrain.pathocls.model import Classifier, Head, embedding_dim
 from pathotrain.pathocls.task import ClassificationTask
 
-__all__ = ["ClassificationTask", "Classifier", "LinearHead", "embedding_dim"]
+__all__ = ["ClassificationTask", "Classifier", "Head", "embedding_dim"]

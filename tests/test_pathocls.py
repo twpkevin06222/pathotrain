@@ -112,3 +112,54 @@ def test_task_logs_the_probe_metrics_per_class():
     assert metrics["val/balanced_acc"] == pytest.approx((1 + 1 + 0.5) / 3)
     with pytest.raises(ValueError, match="class names"):
         ClassificationTask(torch.nn.Identity(), 3, class_names=["a"])
+
+
+def test_online_probe_checkpoints_only_the_head(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone) | {"augmentation": {"n": 1, "m": 1}}
+    metrics = train(cfg)
+    assert metrics["val/balanced_acc"] == 1.0
+    best = tmp_path / "run/checkpoints/best.ckpt"
+    state = torch.load(best, weights_only=True)["model"]
+    assert state and all(k.startswith("head.") for k in state)
+    classifier, _ = load_model(best)
+    assert not any(p.requires_grad for p in classifier.backbone.parameters())
+    assert evaluate(best, "val")["val/balanced_acc"] == 1.0
+
+
+def test_fine_tuning_trains_and_restores_the_backbone(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone)
+    cfg["model"]["freeze"] = False
+    cfg["trainer"]["max_epochs"] = 3
+    train(cfg)
+    last = tmp_path / "run/checkpoints/last.ckpt"
+    state = torch.load(last, weights_only=True)["model"]
+    pretrained = Dinov2Model.from_pretrained(backbone).state_dict()
+    key = "embeddings.patch_embeddings.projection.weight"
+    assert not torch.equal(state[f"backbone.{key}"], pretrained[key])  # it was trained
+    classifier, _ = load_model(last)
+    assert torch.equal(classifier.backbone.state_dict()[key], state[f"backbone.{key}"])
+
+
+def test_backbone_trains_at_its_own_lr():
+    model = torch.nn.Module()
+    model.backbone, model.head = torch.nn.Linear(2, 2), torch.nn.Linear(2, 2)
+    task = ClassificationTask(model, 2, lr=1e-3)
+    optimizer, _ = task.configure_optimizers(10, 1)
+    assert [g["lr"] for g in optimizer.param_groups] == [1e-3, 1e-4]
+    model.backbone.requires_grad_(False)  # frozen: not optimised at all
+    optimizer, _ = task.configure_optimizers(10, 1)
+    assert len(optimizer.param_groups) == 1 and optimizer.param_groups[0]["lr"] == 1e-3
+
+
+def test_mlp_head_trains_reloads_and_exports(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone)
+    cfg["model"]["head"] = {"hidden": 16, "dropout": 0.1}
+    assert train(cfg)["val/balanced_acc"] == 1.0
+    best = tmp_path / "run/checkpoints/best.ckpt"
+    classifier, _ = load_model(best)
+    assert classifier.head.hidden[0].out_features == 16
+    assert classifier.head.linear.in_features == 16
+    assert evaluate(best, "val")["val/balanced_acc"] == 1.0
+    pytest.importorskip("onnxruntime")
+    (tmp_path / "out").mkdir()
+    export(best, tmp_path / "out/m.onnx", mpp=0.5, icc=True)  # checks ORT vs torch

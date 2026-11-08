@@ -29,6 +29,8 @@ class ClassificationTask(Task):
         lr: AdamW learning rate, decayed to 0 with a cosine schedule.
         weight_decay: AdamW weight decay.
         warmup_epochs: Linear warmup to ``lr``; may be fractional, ``0`` disables it.
+        backbone_lr: Learning rate of ``model.backbone``'s trainable parameters when
+            fine-tuning, default ``lr / 10``; a frozen backbone is not optimised.
     """
 
     def __init__(
@@ -39,6 +41,7 @@ class ClassificationTask(Task):
         lr: float = 1e-3,
         weight_decay: float = 1e-4,
         warmup_epochs: float = 0,
+        backbone_lr: float | None = None,
     ) -> None:
         super().__init__()
         self.model = model
@@ -48,6 +51,7 @@ class ClassificationTask(Task):
         if warmup_epochs < 0:
             raise ValueError(f"warmup_epochs must be >= 0, got {warmup_epochs}")
         self.lr, self.weight_decay, self.warmup_epochs = lr, weight_decay, warmup_epochs
+        self.backbone_lr = lr / 10 if backbone_lr is None else backbone_lr
         n = {"num_classes": num_classes}
         self.metrics = MetricCollection(
             {
@@ -86,5 +90,13 @@ class ClassificationTask(Task):
     def configure_optimizers(
         self, total_steps: int, steps_per_epoch: int
     ) -> tuple[Optimizer, LRScheduler]:
-        optimizer = AdamW(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        backbone = getattr(self.model, "backbone", None)
+        backbone_ids = {id(p) for p in backbone.parameters()} if backbone is not None else set()
+        trainable = [p for p in self.model.parameters() if p.requires_grad]
+        groups = [
+            {"params": [p for p in trainable if id(p) not in backbone_ids]},
+            {"params": [p for p in trainable if id(p) in backbone_ids], "lr": self.backbone_lr},
+        ]
+        groups = [g for g in groups if g["params"]]
+        optimizer = AdamW(groups, lr=self.lr, weight_decay=self.weight_decay)
         return optimizer, warmup_cosine(optimizer, total_steps, steps_per_epoch, self.warmup_epochs)
