@@ -1,0 +1,42 @@
+# Tile classification (linear probe): python -m pathotrain.pathocls.train config.yaml
+name: cls01                 # MLflow experiment
+seed: 0
+output_dir: runs/cls01      # config.yaml, checkpoints/, logs/, train.log
+# mlflow_db: mlflow.db      # optional; else MLFLOW_TRACKING_URI
+
+model:
+  name: midnight-12k        # a pathofm model (midnight-12k, spectra-midnight-12k,
+                            # openmidnight-1.1), a histossl .ckpt or export folder;
+                            # frozen, its tile embedding (CLS + mean patch token) is
+                            # computed once per tile
+  # num_classes: 9          # optional check; filled in from the classes found
+
+task:                       # ClassificationTask: the linear head, on standardised embeddings
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  warmup_epochs: 0
+  # class_names: [ADI, BACK, DEB, LYM, MUC, MUS, NORM, STR, TUM]  # label order;
+  #                         # default the train split's labels, sorted
+
+features:                   # the one embedding pass over each split
+  batch_size: 64
+  num_workers: 4
+
+trainer:
+  max_epochs: 50            # epochs over the cached embeddings: seconds each
+  accelerator: auto
+  devices: 1
+  precision: 32-true
+
+# checkpoint: {monitor: val/balanced_acc, mode: max}  # the defaults
+# early_stopping: {patience: 10}
+
+loader:                     # head training on the cached embeddings
+  batch_size: 256
+  num_workers: 0            # embeddings are in memory; workers only add start-up time
+
+data:
+  train: {root: data/crc/train}         # class folders: root/<class>/*.png
+  val: {root: data/crc/val}             # optional; without it no validation or best.ckpt
+  # test: {csv: data/crc/test.csv}      # path,label CSV (paths relative to the CSV,
+  #                                     # or to root: dir); scored only by the eval command

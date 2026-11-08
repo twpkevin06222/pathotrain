@@ -398,6 +398,8 @@ def model_card(
     }
     if task == "segmentation":
         card["background_id"] = 0
+    elif task == "classification":
+        card["background_id"] = None  # no class is "not a finding" by default
     return card
 
 
