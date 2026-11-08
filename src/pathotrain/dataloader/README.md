@@ -79,7 +79,9 @@ bcss = SegmentationTileFolderDataset(images="tissue-bcss/images", masks="tissue-
 ```
 
 Images of different sizes cannot be batched as they are: crop them to one size
-in the transform, e.g. `train_transform(crop=512)`.
+in the transform, e.g. `train_transform(crop=512)`. A side shorter than the crop
+is padded first: grey (`fill`) in the image, `mask_fill` (255, ignored) in the mask,
+so the padding never counts in the loss or IoU.
 
 Class content per tile, e.g. to weight sampling: `class_fraction[i, k]` is the
 share of tile `i`'s pixels with label `k` (column 0 background, `ignore_index`

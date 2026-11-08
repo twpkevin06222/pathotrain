@@ -157,13 +157,40 @@ def test_foreground_crop_keeps_a_box_in_detection_crops():
 
 
 def test_foreground_crop_validation():
-    tile, mask = _sparse_tile()
     with pytest.raises(ValueError, match="needs crop"):
         train_transform(foreground_crop=0.3)
     with pytest.raises(ValueError, match="probability"):
         train_transform(crop=32, foreground_crop=1.5)
-    with pytest.raises(ValueError, match="smaller than the crop"):
-        train_transform(n=0, crop=256, foreground_crop=0.5)(tile, mask)
+
+
+@pytest.mark.parametrize("foreground_crop", [0.0, 1.0])
+def test_crop_pads_short_tiles_with_ignore_in_the_mask(foreground_crop):
+    # 40 x 60 tile, 64 px crop: both sides are padded, the padding is never a label.
+    tile = np.full((40, 60, 3), 200, np.uint8)
+    mask = np.ones((40, 60), np.uint8)
+    t = train_transform(n=0, crop=64, foreground_crop=foreground_crop, mean=(0,) * 3, std=(1,) * 3)
+    torch.manual_seed(0)
+    for _ in range(20):
+        image, out = t(tile, mask)
+        assert image.shape == (3, 64, 64) and out.shape == (64, 64)
+        padded = out == 255
+        assert set(out.unique().tolist()) <= {1, 255}
+        assert (out == 1).sum() <= 40 * 60 and padded.sum() >= 64 * 64 - 40 * 60
+        assert torch.allclose(image[:, padded], torch.tensor(128 / 255))  # fill grey
+        assert torch.allclose(image[:, ~padded], torch.tensor(200 / 255))
+
+
+def test_foreground_crop_pads_and_keeps_boxes_in_place():
+    tile = np.zeros((40, 60, 3), np.uint8)
+    tile[10:20, 30:40] = 255  # the box's pixels
+    target = {"boxes": np.array([[30, 10, 10, 10]], np.float32), "labels": np.array([1])}
+    t = train_transform(n=0, crop=64, foreground_crop=1.0, boxes=True, mean=(0,) * 3, std=(1,) * 3)
+    torch.manual_seed(0)
+    for _ in range(20):
+        image, out = t(tile, target)
+        x1, y1, x2, y2 = out["boxes"][0].round().int().tolist()
+        assert out["labels"].tolist() == [1] and (x2 - x1, y2 - y1) == (10, 10)
+        assert (image[:, y1:y2, x1:x2] == 1).all()  # the box still covers its pixels
 
 
 def test_foreground_crop_is_refused_for_slide_training_splits():
