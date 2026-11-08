@@ -51,6 +51,31 @@ def toy_data(monkeypatch):
     )
 
 
+def test_sampling_section_trains_with_a_class_weighted_sampler(tmp_path, monkeypatch):
+    image = torch.rand(16, 3, 4, 4).repeat_interleave(8, 2).repeat_interleave(8, 3)
+    mask = (image[:, 0] > 0.5).long()
+
+    class Tiles(TensorDataset):
+        class_fraction = np.stack([(mask == 0).float().mean((1, 2)), mask.float().mean((1, 2))], 1)
+
+    monkeypatch.setattr(
+        train_module, "build_dataset", lambda cfg, split, transform: Tiles(image, mask)
+    )
+    seen = {}
+    fit = train_module.experiment.fit
+
+    def spy(*args, train_sampler=None, **kwargs):
+        seen["sampler"] = train_sampler
+        return fit(*args, train_sampler=train_sampler, **kwargs)
+
+    monkeypatch.setattr(train_module.experiment, "fit", spy)
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    cfg = {**_cfg(tmp_path / "run"), "sampling": {"power": 0.5, "num_samples": 8}}
+    assert "val/miou" in train(cfg)
+    assert seen["sampler"].num_samples == 8 and len(seen["sampler"].weights) == 16
+
+
 def test_mlflow_db_keeps_runs_and_artifacts_beside_it(tmp_path, monkeypatch, toy_data):
     (tmp_path / "elsewhere").mkdir()
     monkeypatch.chdir(tmp_path / "elsewhere")

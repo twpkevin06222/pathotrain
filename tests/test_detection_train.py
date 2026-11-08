@@ -146,3 +146,19 @@ def test_export_writes_boxes_scores_and_labels(tmp_path):
     assert loaded.output.score_threshold == 0.5
     with pytest.raises(ValueError, match="score_threshold"):
         export(tmp_path / "m.ckpt", tmp_path / "m.onnx", score_threshold=1.5)
+
+
+def test_sampling_section_passes_a_class_weighted_sampler(tmp_path, monkeypatch):
+    class Tiles(list):
+        class_count = np.array([[1, 0], [1, 0], [1, 0], [0, 1]])
+
+    monkeypatch.setattr(train_module, "build_dataset", lambda cfg, split, transform: Tiles([0] * 4))
+    seen = {}
+    monkeypatch.setattr(
+        train_module.experiment,
+        "fit",
+        lambda *a, train_sampler=None, **k: seen.update(s=train_sampler),
+    )
+    train({**_cfg(tmp_path / "run"), "sampling": {"power": 1.0}})
+    weights = seen["s"].weights
+    assert len(weights) == 4 and weights[3] / weights[0] == pytest.approx(3.0)  # 1/4 vs 3/4
