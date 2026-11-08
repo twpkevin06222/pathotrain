@@ -19,6 +19,9 @@ uploaded to the MLflow run and logged as flat params; checkpoints store it too
     checkpoint?: {...}          # ModelCheckpoint; monitor defaults to val/map
     early_stopping?: {...}      # EarlyStopping (monitor val/map); leave out to train every epoch
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
+    sampling?: {...}            # class-weighted tile sampling for training
+                                # (power, max_ratio, background, num_samples),
+                                # see pathotrain.dataloader.sampling
     loader?: {...}              # both DataLoaders, as for segmentation; collate_fn is set
     data:
       train: {slides: [dir, ...], annotations: [dir, ...], tiling: {...}}
@@ -40,6 +43,7 @@ from patchology import TilingConfig
 from pathotrain import experiment
 from pathotrain.dataloader import DetectionDataset, DetectionTileFolderDataset
 from pathotrain.dataloader.augmentation import eval_transform, train_transform
+from pathotrain.dataloader.sampling import build_sampler
 from pathotrain.detection.models import Detector, build_detector
 from pathotrain.detection.task import DetectionTask, collate
 from pathotrain.engine import load_config
@@ -108,6 +112,7 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         resume,
         monitor="val/map",
         trainer_defaults={"grad_clip": 0.1},
+        train_sampler=build_sampler(cfg, train_set.class_count) if "sampling" in cfg else None,
         collate_fn=collate,
     )
 

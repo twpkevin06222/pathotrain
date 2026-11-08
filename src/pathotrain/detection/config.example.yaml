@@ -63,6 +63,15 @@ augmentation:
   noise: 0.0
   jpeg: 0.0
 
+# Optional; class-weighted tile sampling for training (off when left out), from each
+# tile's class content. See pathotrain.dataloader.sampling.
+# sampling:
+#   power: 0.5              # 0 keeps class shares as they are, 1 balances them fully
+#   max_ratio: 10           # cap on how much more a rare class is drawn than the commonest
+#   background: null        # share of draws from tiles without boxes (min_objects: 0);
+#                           # null keeps theirs
+#   num_samples: null       # draws per epoch; null = number of training tiles
+
 # Optional; keyword arguments for both DataLoaders (collate_fn is set for you).
 loader:
   batch_size: 8

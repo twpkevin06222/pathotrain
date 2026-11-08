@@ -20,6 +20,9 @@ Sections (``?`` marks optional ones)::
     checkpoint?: {...}          # ModelCheckpoint (monitor, mode, log_artifact)
     early_stopping?: {...}      # EarlyStopping; leave out to train every epoch
     augmentation?: {...}        # train_transform (n, m, crop, blur, noise, jpeg)
+    sampling?: {...}            # class-weighted tile sampling for training
+                                # (power, max_ratio, background, num_samples),
+                                # see pathotrain.dataloader.sampling
     loader?: {...}              # both DataLoaders (batch_size, num_workers, ...);
                                 # pin_memory defaults to true when CUDA is available,
                                 # persistent_workers to true for the training loader,
@@ -48,6 +51,7 @@ from patchology import TilingConfig
 from pathotrain import experiment, segmentation
 from pathotrain.dataloader import SegmentationDataset, SegmentationTileFolderDataset
 from pathotrain.dataloader.augmentation import eval_transform, train_transform
+from pathotrain.dataloader.sampling import build_sampler
 from pathotrain.engine import load_config
 from pathotrain.experiment import normalisation
 
@@ -99,7 +103,10 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     val_set = None
     if "val" in cfg["data"]:
         val_set = build_dataset(cfg, "val", eval_transform(mean=mean, std=std))
-    return experiment.fit(cfg, task, train_set, val_set, config_path, resume)
+    sampler = None
+    if "sampling" in cfg:  # class_fraction without its background column
+        sampler = build_sampler(cfg, train_set.class_fraction[:, 1:])
+    return experiment.fit(cfg, task, train_set, val_set, config_path, resume, train_sampler=sampler)
 
 
 def load_model(path: str | Path, map_location: str = "cpu") -> tuple[nn.Module, dict]:
