@@ -106,7 +106,8 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         val_set = build_dataset(cfg, "val", eval_transform(mean=mean, std=std))
     sampler = None
     if "sampling" in cfg:  # class_fraction without its background column
-        sampler = build_sampler(cfg, train_set.class_fraction[:, 1:])
+        area = getattr(train_set, "image_area", None)  # tile folders only
+        sampler = build_sampler(cfg, train_set.class_fraction[:, 1:], area)
     return experiment.fit(cfg, task, train_set, val_set, config_path, resume, train_sampler=sampler)
 
 

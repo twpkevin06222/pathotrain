@@ -116,7 +116,11 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         resume,
         monitor="val/map",
         trainer_defaults={"grad_clip": 0.1},
-        train_sampler=build_sampler(cfg, train_set.class_count) if "sampling" in cfg else None,
+        train_sampler=(
+            build_sampler(cfg, train_set.class_count, getattr(train_set, "image_area", None))
+            if "sampling" in cfg
+            else None
+        ),
         collate_fn=collate,
     )
 

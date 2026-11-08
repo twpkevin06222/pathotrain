@@ -196,16 +196,22 @@ class DetectionTileFolderDataset(Dataset):
         for a in coco["annotations"]:
             if not a.get("iscrowd", 0):
                 objects.setdefault(a["image_id"], []).append(a)
-        self.files, self.targets = [], []
+        self.files, self.targets, area = [], [], []
         for image in coco["images"]:
             anns = objects.get(image["id"], [])
             self.files.append(self.root / image["file_name"])
+            # COCO's width x height, else the image header
+            area.append(
+                image.get("width", 0) * image.get("height", 0)
+                or np.prod(Image.open(self.files[-1]).size)
+            )
             self.targets.append(
                 {
                     "boxes": np.array([a["bbox"] for a in anns], np.float32).reshape(-1, 4),
                     "labels": np.array([label_of[a["category_id"]] for a in anns], np.int64),
                 }
             )
+        self.image_area = np.array(area, dtype=int)  # (tiles,) pixels per image
 
     def __len__(self) -> int:
         return len(self.files)

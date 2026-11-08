@@ -83,6 +83,13 @@ in the transform, e.g. `train_transform(crop=512)`. A side shorter than the crop
 is padded first: grey (`fill`) in the image, `mask_fill` (255, ignored) in the mask,
 so the padding never counts in the loss or IoU.
 
+Every image in a tile folder must have the same resolution (um per pixel): a
+512 px crop covers 256 um at 0.5 um/px but 128 um at 0.25 um/px, so mixed
+resolutions change the apparent size of the tissue. Slide datasets resample every
+slide to `tile_mpp`, and an export from one config is uniform, but a folder of
+tiles from elsewhere carries no resolution, so pathotrain cannot check it. Resample
+such images to one um/px (the one you will infer at) before training.
+
 Class content per tile, e.g. to weight sampling: `class_fraction[i, k]` is the
 share of tile `i`'s pixels with label `k` (column 0 background, `ignore_index`
 pixels in no column). `SegmentationDataset` takes it from patchology, the folder
@@ -90,6 +97,9 @@ dataset from `tiles.csv` (`class_<k>` columns), or else reads every mask once on
 first use. Detection datasets have `class_count[i, k]`, boxes per label.
 `pathotrain.dataloader.sampling` turns either into a class-weighted training
 sampler (the `sampling:` section of the segmentation and detection configs).
+For tile folders of mixed sizes, `sampling.by_area: true` also weights each image
+by its area (`image_area`, pixels) in `augmentation.crop` windows, and an epoch
+then defaults to the total area in crops.
 
 Both datasets take `transform(tile, mask)`, called with the `(H, W, 3)` uint8
 tile and `(H, W)` uint8 mask; its return value is the sample. Use it for

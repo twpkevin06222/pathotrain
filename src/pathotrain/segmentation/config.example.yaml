@@ -77,7 +77,10 @@ augmentation:
 #   max_ratio: 10           # cap on how much more a rare class is drawn than the commonest
 #   background: null        # share of draws from tiles without labels; null keeps theirs.
 #                           # Set this or data.train.negative_sampling, not both
-#   num_samples: null       # draws per epoch; null = number of training tiles
+#   num_samples: null       # draws per epoch; null = number of training tiles (with
+#                           # by_area: total image area in crops)
+#   by_area: false          # tile folders of mixed sizes: weight each image by its area
+#                           # in augmentation.crop windows (2x the area, 2x the crops)
 
 # Optional; keyword arguments for both DataLoaders.
 loader:
@@ -118,4 +121,5 @@ data:
   # Or tiles already on disk, per split (the options above then do not apply):
   #   train: {root: tiles/train}                         # written by export_segmentation_tiles
   #   train: {images: tumor/images, masks: tumor/masks}    # paired by file stem
-  # Tiles of different sizes need augmentation.crop to be batched.
+  # Tiles of different sizes need augmentation.crop to be batched. All tiles in a folder
+  # must share one um/px (unchecked: folders carry no resolution); resample them first.
