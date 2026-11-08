@@ -12,7 +12,7 @@ from pathotrain.histossl.eval.linear_probe import probe_transform
 from pathotrain.pathocls import ClassificationTask
 from pathotrain.pathocls.eval import evaluate
 from pathotrain.pathocls.export import export
-from pathotrain.pathocls.train import load_model, train
+from pathotrain.pathocls.train import complete, load_model, train, train_sampler
 
 CPU = {"accelerator": "cpu", "devices": 1, "precision": "32-true"}
 
@@ -190,3 +190,18 @@ def test_a_backbone_from_scratch_cannot_be_frozen(tmp_path, backbone):
     cfg["model"] = {"name": "timm:test_resnet", "pretrained": False}
     with pytest.raises(ValueError, match="freeze: false"):
         train(cfg)
+
+
+def test_class_weighted_sampling_balances_the_classes(tmp_path, backbone):
+    cfg = _cfg(tmp_path, backbone) | {"sampling": {"power": 1.0}}
+    train_dir = tmp_path / "train"
+    for p in sorted((train_dir / "blue").iterdir())[4:]:
+        p.unlink()  # 4 blue vs 8 red tiles
+    metrics = train(cfg)
+    assert metrics["val/balanced_acc"] == 1.0
+    sampler = train_sampler(complete(cfg))
+    labels = torch.tensor([y for _, y in ClassTileDataset(train_dir).samples])
+    per_class = [sampler.weights[labels == c].sum().item() for c in (0, 1)]
+    assert per_class[0] == pytest.approx(per_class[1])  # each class drawn as often
+    assert sampler.num_samples == 12
+    assert train_sampler(_cfg(tmp_path / "plain", backbone)) is None
