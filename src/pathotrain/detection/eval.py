@@ -49,8 +49,8 @@ def evaluate(
     if split not in cfg["data"]:
         raise ValueError(f"data has no {split!r} split; pass --config with one")
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
-    crop = cfg.get("augmentation", {}).get("crop")
-    transform = eval_transform(crop, mean=mean, std=std, boxes=True)
+    train.check_eval_crop(cfg)
+    transform = eval_transform(mean=mean, std=std, boxes=True)
     dataset = train.build_dataset(cfg, split, transform)
     task = DetectionTask(detector, **cfg.get("task", {}))
     metrics = experiment.evaluate(cfg, task, dataset, split, collate_fn=collate)

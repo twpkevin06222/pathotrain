@@ -47,10 +47,9 @@ def evaluate(
     if split not in cfg["data"]:
         raise ValueError(f"data has no {split!r} split; pass --config with one")
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
-    crop = cfg.get("augmentation", {}).get("crop")
-    dataset = train.build_dataset(cfg, split, eval_transform(crop, mean=mean, std=std))
+    dataset = train.build_dataset(cfg, split, eval_transform(mean=mean, std=std))
     task = SegmentationTask(
-        model, cfg["model"]["num_classes"], loss=train.build_loss(cfg), **cfg.get("task", {})
+        model, cfg["model"]["num_classes"], loss=train.build_loss(cfg), **train.task_kwargs(cfg)
     )
     metrics = experiment.evaluate(cfg, task, dataset, split)
     experiment.log_eval(cfg, checkpoint, split, metrics, mlflow_db)

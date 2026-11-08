@@ -71,6 +71,21 @@ def build_dataset(cfg: dict, split: str, transform) -> Dataset:
     return dataset
 
 
+def check_eval_crop(cfg: dict) -> None:
+    """Refuse ``augmentation.crop`` for scoring: detection has no windowed evaluation.
+
+    Raises:
+        ValueError: ``augmentation.crop`` is set.
+    """
+    # shortcut: no windowed detection eval (needs boxes merged across windows, e.g. NMS);
+    # add it if crops are needed for shifts.
+    if cfg.get("augmentation", {}).get("crop"):
+        raise ValueError(
+            "augmentation.crop with a val or test split: detection scores whole tiles and "
+            "has no windowed evaluation; set crop to null and tile at the training size"
+        )
+
+
 def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     """Run the experiment ``cfg`` describes and return the last validation metrics."""
     mean, std = normalisation(cfg, "mean"), normalisation(cfg, "std")
@@ -82,9 +97,8 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     )
     val_set = None
     if "val" in cfg["data"]:
-        val_set = build_dataset(
-            cfg, "val", eval_transform(augmentation.get("crop"), mean=mean, std=std, boxes=True)
-        )
+        check_eval_crop(cfg)
+        val_set = build_dataset(cfg, "val", eval_transform(mean=mean, std=std, boxes=True))
     return experiment.fit(
         cfg,
         task,

@@ -53,7 +53,8 @@ early_stopping:
   patience: 10
 
 # Optional; train_transform(boxes=True). Boxes move with flips, 90 degree turns and
-# RandAugment's translate, shear and rotate. Validation uses the same crop and normalisation.
+# RandAugment's translate, shear and rotate. Validation uses the same normalisation on whole
+# tiles; crop is refused with a val or test split (no windowed detection evaluation).
 augmentation:
   n: 3                      # H&E RandAugment ops per tile; 0 turns it off
   m: 5                      # their magnitude

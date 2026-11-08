@@ -59,7 +59,8 @@ early_stopping:
   mode: max
   patience: 10
 
-# Optional; train_transform. Validation uses the same crop and normalisation.
+# Optional; train_transform. Validation uses the same normalisation on whole tiles; with
+# crop, it scores them from overlapping crop-sized windows (task.window, window_overlap).
 augmentation:
   n: 3                      # H&E RandAugment ops per tile; 0 turns it off
   m: 5                      # their magnitude

@@ -364,7 +364,8 @@ def train_transform(
         n, m: H&E RandAugment operations per tile and magnitude, see
             :func:`he_randaugment`; ``n=0`` turns it off.
         crop: Random ``crop x crop`` window; tile larger than this for shift
-            augmentation, and pass the same ``crop`` to :func:`eval_transform`.
+            augmentation. Validation keeps whole tiles; segmentation scores them
+            from ``crop`` windows (``SegmentationTask(window=crop)``).
         mean, std: Normalisation, in ``[0, 1]`` units (ImageNet by default).
         fill, mask_fill: Tile and mask value for pixels uncovered by geometric ops.
         blur, noise, jpeg: Probability of Gaussian blur (sigma in :data:`BLUR_SIGMA`),
@@ -393,12 +394,11 @@ def train_transform(
 
 
 def eval_transform(
-    crop: int | None = None,
     mean: Sequence[float] = IMAGENET_MEAN,
     std: Sequence[float] = IMAGENET_STD,
     boxes: bool = False,
 ) -> SegmentationTransform | DetectionTransform:
-    """Deterministic preprocessing: centre crop (if ``crop``) and the same normalisation as
-    training. ``boxes`` as for :func:`train_transform`."""
+    """Deterministic preprocessing: the same normalisation as training, on the whole
+    tile (no crop, so every pixel is scored). ``boxes`` as for :func:`train_transform`."""
     cls = DetectionTransform if boxes else SegmentationTransform
-    return cls([v2.CenterCrop(crop)] if crop else [], mean, std)
+    return cls([], mean, std)
