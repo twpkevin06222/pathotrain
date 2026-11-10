@@ -16,9 +16,10 @@ std: IMAGENET_STD
 model:
   name: smp:unet
   num_classes: 8            # example; classes including background (label 0)
-  encoder_name: resnet34    # example; or midnight-12k (then set mean/std to MIDNIGHT_*)
+  encoder_name: resnet34    # example; or midnight-12k / sam3 (then set mean/std to MIDNIGHT_*)
   encoder_weights: imagenet # null for midnight-12k, which loads its own weights
-  # encoder_kwargs: {freeze: true}  # midnight-12k only: false fine-tunes the backbone
+  # encoder_kwargs: {freeze: true}  # midnight-12k / sam3 only: false fine-tunes the backbone;
+  #   {adaptation: {type: lora, rank: 8}} fine-tunes it with LoRA (needs peft)
 
 # Optional; default CEDiceLoss. CEDiceLoss, FocalLoss or FocalDiceLoss, other keys go to it.
 loss:

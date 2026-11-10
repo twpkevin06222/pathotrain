@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from pathotrain.pathofm import load_backbone
-from pathotrain.segmentation.encoders import token_grids
+from pathotrain.segmentation.encoders import adapt_backbone, token_grids
 
 # The instance branches, as HoVer-Net: nucleus vs background (NP, 2 logits), horizontal and
 # vertical distance maps (HV, 2 values) and nucleus type (NT, num_classes logits).
@@ -246,6 +246,8 @@ class CellViT(nn.Module):
         layers: Four 1-based transformer layers, shallow to deep. Default: evenly
             spaced, ending with the last layer.
         freeze: Keep the backbone fixed (only the decoder trains). ``False`` fine-tunes it.
+        adaptation: Train the backbone partly instead, e.g. ``{type: lora, rank: 8}``; see
+            :func:`~pathotrain.segmentation.encoders.adapt_backbone`. Overrides ``freeze``.
         skip_dims: Channels of the stride-8 and stride-4 steps of the shallowest skip.
         bottleneck_dim: Channels of the deepest skip.
         instance: Return the NP, HV and NT branches as a dict.
@@ -262,6 +264,7 @@ class CellViT(nn.Module):
         skip_dims: tuple[int, int] = (512, 256),
         bottleneck_dim: int = 512,
         instance: bool = False,
+        adaptation: dict | None = None,
     ) -> None:
         super().__init__()
         self.backbone = load_backbone(backbone) if isinstance(backbone, str) else backbone
@@ -269,8 +272,7 @@ class CellViT(nn.Module):
         self.layers = tuple(layers or (round(n * i / 4) for i in range(1, 5)))
         if len(self.layers) != 4 or not all(1 <= i <= n for i in self.layers):
             raise ValueError(f"layers must be four indices in [1, {n}], got {self.layers}")
-        self.freeze = freeze
-        self.backbone.requires_grad_(not freeze)
+        self.backbone, self.freeze = adapt_backbone(self.backbone, freeze, adaptation)
         s1, s2, b = *skip_dims, bottleneck_dim
         self.decoder0 = nn.Sequential(_conv(3, 32), _conv(32, 64))  # stride 1, the image
         self.decoder1 = nn.Sequential(_deconv(dim, s1), _deconv(s1, s2), _deconv(s2, 128))

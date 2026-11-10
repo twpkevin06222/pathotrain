@@ -33,9 +33,12 @@ Options per model:
   `imagenet`: timm's `fb_in22k_ft_in1k` weights, Apache-2.0; `null` from scratch). The
   paper's ConvNeXt-V2 (`encoder: convnextv2_base`) has ImageNet weights under
   CC-BY-NC-4.0 only. Other keys go to `smp.Unet`.
-- **cellvit:** `backbone` (e.g. `midnight-12k`; then set `mean`/`std` to `MIDNIGHT_*`),
-  `layers` (four 1-based layers, default evenly spaced), `freeze` (default `true`),
-  `skip_dims`, `bottleneck_dim`. Input sides must be divisible by 16.
+- **cellvit:** `backbone` (`midnight-12k`, `sam3`, ...; both normalise with
+  `MIDNIGHT_MEAN` / `MIDNIGHT_STD`), `layers` (four 1-based layers, default evenly
+  spaced), `freeze` (default `true`), `adaptation` (e.g. `{type: lora, rank: 8}` to
+  fine-tune the backbone with LoRA, needs peft; overrides `freeze`), `skip_dims`,
+  `bottleneck_dim`. Input sides must be divisible by 16. `sam3` is gated and under the
+  SAM License (see the pathofm README).
 
 ## Instance segmentation
 

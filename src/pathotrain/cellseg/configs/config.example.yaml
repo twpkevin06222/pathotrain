@@ -15,7 +15,8 @@ model:
   encoder_weights: imagenet # hovernet: timm ResNetV2-50 (Apache-2.0); null from scratch
   # cellseg:hovernext: encoder: convnext_base, encoder_weights: imagenet (Apache-2.0);
   #   the paper's convnextv2_base has CC-BY-NC-4.0 ImageNet weights only
-  # cellseg:cellvit: backbone: midnight-12k, freeze: true, layers: [10, 20, 30, 40]
+  # cellseg:cellvit: backbone: midnight-12k (or sam3), freeze: true, layers: [10, 20, 30, 40]
+  #   adaptation: {type: lora, rank: 8}  # LoRA fine-tuning instead of freeze (needs peft)
 
 loss:
   name: CEDiceLoss

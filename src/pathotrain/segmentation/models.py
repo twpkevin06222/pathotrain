@@ -13,7 +13,7 @@ from dynamic_network_architectures.architectures.unet import PlainConvUNet, Resi
 from dynamic_network_architectures.initialization.weight_init import InitWeights_He
 from torch import nn
 
-from pathotrain.pathofm import FOUNDATION_MODELS
+from pathotrain.pathofm import FOUNDATION_MODELS, SAM_MODELS
 from pathotrain.segmentation.encoders import build_fm_model
 
 
@@ -36,7 +36,8 @@ def build_model(name: str, num_classes: int, in_channels: int = 3, **kwargs) -> 
     """
     library, _, arch = name.partition(":")
     encoder = kwargs.get("encoder_name")
-    if library == "smp" and (encoder in FOUNDATION_MODELS or isinstance(encoder, nn.Module)):
+    vit = encoder in FOUNDATION_MODELS or encoder in SAM_MODELS or isinstance(encoder, nn.Module)
+    if library == "smp" and vit:
         kwargs.pop("encoder_weights", None)  # the foundation model loads its own weights
         return build_fm_model(arch, kwargs.pop("encoder_name"), num_classes, in_channels, **kwargs)
     if library == "smp":
