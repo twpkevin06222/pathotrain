@@ -1,0 +1,63 @@
+# Semantic cell segmentation on PanNuke-style tile folders:
+#   python -m pathotrain.segmentation.train config.yaml
+# Same sections and defaults as segmentation/config.example.yaml; this file sets only
+# what differs for cells. Copy it and set the paths under `data`.
+
+name: cellseg-hovernet
+seed: 0
+output_dir: runs/cellseg-hovernet
+mean: IMAGENET_MEAN         # MIDNIGHT_MEAN / MIDNIGHT_STD for cellvit on midnight-12k
+std: IMAGENET_STD
+
+model:
+  name: cellseg:hovernet    # or cellseg:hovernext, cellseg:cellvit
+  num_classes: 6            # background + 5 PanNuke nucleus types
+  encoder_weights: imagenet # hovernet: timm ResNetV2-50 (Apache-2.0); null from scratch
+  # cellseg:hovernext: encoder: convnextv2_base, encoder_weights: null (its ImageNet
+  #   weights are CC-BY-NC-4.0; encoder: convnext_base + imagenet is Apache-2.0)
+  # cellseg:cellvit: backbone: midnight-12k, freeze: true, layers: [10, 20, 30, 40]
+
+loss:
+  name: CEDiceLoss
+  dice_weight: 1.0
+
+task:
+  lr: 1.0e-3
+  warmup_epochs: 1
+  # class_names: [background, ...]  # in your masks' label order (it differs between
+  #                                  # PanNuke conversions); default 0..5
+
+trainer:
+  max_epochs: 50
+  precision: bf16-mixed
+
+checkpoint:
+  monitor: val/miou_fg      # nuclei only; background dominates val/miou
+  mode: max
+
+augmentation:
+  n: 3
+  m: 5
+
+loader:
+  batch_size: 16
+  num_workers: 8
+
+# PanNuke tiles: 256 px at 40x (~0.25 um/px). Images and masks are paired by name once
+# the prefixes are removed (img_X.png with sem_X.png).
+data:
+  train:
+    images: /path/to/pannuke_split/train/images
+    masks: /path/to/pannuke_split/train/sem_masks
+    image_prefix: img_
+    mask_prefix: sem_
+  val:
+    images: /path/to/pannuke_split/val/images
+    masks: /path/to/pannuke_split/val/sem_masks
+    image_prefix: img_
+    mask_prefix: sem_
+  test:
+    images: /path/to/pannuke_split/test/images
+    masks: /path/to/pannuke_split/test/sem_masks
+    image_prefix: img_
+    mask_prefix: sem_

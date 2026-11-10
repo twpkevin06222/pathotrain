@@ -38,7 +38,10 @@ def _starts(length: int, size: int, overlap: float) -> list[int]:
 def input_multiple(model: nn.Module) -> int:
     """The number ``model``'s input sides must be divisible by: an SMP encoder's
     output stride (32; the U-Net and DeepLabV3+ decoders cope without, FPN, U-Net++
-    and others refuse), nnU-Net's total downsampling (64 with 7 stages), else 1."""
+    and others refuse), nnU-Net's total downsampling (64 with 7 stages), a model's own
+    ``output_stride`` (the ``cellseg`` networks), else 1."""
+    if isinstance(getattr(model, "output_stride", None), int):
+        return model.output_stride
     encoder = getattr(model, "encoder", None)
     if hasattr(encoder, "output_stride"):
         return encoder.output_stride

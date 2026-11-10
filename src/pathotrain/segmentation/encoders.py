@@ -25,6 +25,25 @@ from torch import Tensor, nn
 from pathotrain.pathofm import FOUNDATION_MODELS, load_backbone
 
 
+def token_grids(
+    backbone: nn.Module, x: Tensor, layers: tuple[int, ...], freeze: bool = True
+) -> list[Tensor]:
+    """Patch tokens of the 1-based transformer ``layers`` as ``(B, D, H/16, W/16)`` grids.
+
+    ``x`` is resized so the token grid is exactly ``H/16 x W/16`` (512 px -> 448 px for
+    patch 14). With ``freeze`` the backbone runs without gradients.
+    """
+    b, _, h, w = x.shape
+    gh, gw, patch = h // 16, w // 16, backbone.config.patch_size
+    pixels = F.interpolate(x, size=(gh * patch, gw * patch), mode="bilinear", align_corners=False)
+    with torch.set_grad_enabled(torch.is_grad_enabled() and not freeze):
+        hidden = backbone(pixel_values=pixels, output_hidden_states=True).hidden_states
+    norm = getattr(backbone, "layernorm", nn.Identity())
+    # Final LayerNorm on every layer, so the last one is exactly the model card's
+    # segmentation embedding (last_hidden_state); drop CLS/register tokens.
+    return [norm(hidden[i][:, -gh * gw :]).transpose(1, 2).reshape(b, -1, gh, gw) for i in layers]
+
+
 def _resample(dim: int, channels: int, stride: int) -> nn.Sequential:
     """1x1 projection, then resample the stride-16 grid to ``stride``."""
     layers = [nn.Conv2d(dim, channels, 1)]
@@ -76,6 +95,8 @@ class ViTPyramidEncoder(nn.Module, EncoderMixin):
         if len(channels) != 4:
             raise ValueError(f"channels must have four values, got {channels}")
         self.patch_size = cfg.patch_size
+        # The backbone's LayerNorm under a second name: unused here (token_grids applies
+        # it), kept so existing checkpoints, which hold it as encoder.norm.*, still load.
         self.norm = getattr(self.backbone, "layernorm", nn.Identity())
         # A dilated encoder (output_stride 8 or 16, for DeepLab and PAN) keeps the
         # deepest features at output_stride instead of downsampling further.
@@ -92,21 +113,8 @@ class ViTPyramidEncoder(nn.Module, EncoderMixin):
 
     def forward(self, x: Tensor) -> list[Tensor]:
         b, _, h, w = x.shape
-        gh, gw = h // 16, w // 16
-        pixels = F.interpolate(
-            x,
-            size=(gh * self.patch_size, gw * self.patch_size),
-            mode="bilinear",
-            align_corners=False,
-        )
-        with torch.set_grad_enabled(torch.is_grad_enabled() and not self.freeze):
-            hidden = self.backbone(pixel_values=pixels, output_hidden_states=True).hidden_states
-        feats = []
-        for layer, resample in zip(self.layers, self.resample, strict=True):
-            # Final LayerNorm on every layer, so the last one is exactly the model card's
-            # segmentation embedding (last_hidden_state); drop CLS/register tokens.
-            tokens = self.norm(hidden[layer][:, -gh * gw :])
-            feats.append(resample(tokens.transpose(1, 2).reshape(b, -1, gh, gw)))
+        grids = token_grids(self.backbone, x, self.layers, self.freeze)
+        feats = [resample(g) for g, resample in zip(grids, self.resample, strict=True)]
         return [x, x.new_empty(b, 0, h // 2, w // 2), *feats][: self._depth + 1]
 
     def make_dilated(self, output_stride: int) -> None:
@@ -142,4 +150,4 @@ def build_fm_model(
         del smp.encoders.encoders[name]
 
 
-__all__ = ["FOUNDATION_MODELS", "ViTPyramidEncoder", "build_fm_model"]
+__all__ = ["FOUNDATION_MODELS", "ViTPyramidEncoder", "build_fm_model", "token_grids"]

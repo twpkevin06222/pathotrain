@@ -119,7 +119,7 @@ def load_model(path: str | Path, map_location: str = "cpu") -> tuple[nn.Module, 
         raise ValueError(f"{path} has no config; it was not written by pathotrain's train")
     cfg = ckpt["config"]
     kwargs = dict(cfg["model"])
-    if kwargs["name"].startswith("smp:"):
+    if kwargs["name"].startswith(("smp:", "cellseg:")):
         kwargs["encoder_weights"] = None  # the checkpoint holds every weight
     model = segmentation.build_model(**kwargs)
     model.load_state_dict(ckpt["model"])

@@ -1,0 +1,49 @@
+# CellViT++ cell classifier: a head on each cell's frozen foundation-model tokens.
+#   python -m pathotrain.cellseg.classify classify.yaml
+# Trains on the ground-truth cells of data.train, scored on data.val (val/balanced_acc,
+# val/macro_f1, val/recall_<class>, ...). Copy this file and set the paths under `data`.
+
+name: cellseg-classify
+seed: 0
+output_dir: runs/cellseg-classify
+mean: MIDNIGHT_MEAN         # the backbone's normalisation
+std: MIDNIGHT_STD
+
+model:
+  backbone: midnight-12k    # a pathotrain.pathofm model, frozen
+  num_classes: 5            # nucleus types without background (type t is class t - 1)
+  layer: null               # 1-based transformer layer for the tokens; null = last
+  head: {hidden: null, dropout: 0.0}  # hidden: e.g. 512 for an MLP head
+
+task:
+  lr: 1.0e-3
+  # class_names: [...]      # the nucleus types, in label order 1..5
+
+trainer:
+  max_epochs: 50
+
+features:                   # embedding the cells, once
+  batch_size: 16            # tiles per batch
+  num_workers: 8
+
+loader:                     # training the head on the embeddings
+  batch_size: 512
+  num_workers: 0            # embeddings are in memory
+
+data:
+  train:
+    images: /path/to/pannuke_split/train/images
+    instances: /path/to/pannuke_split/train/inst_masks
+    types: /path/to/pannuke_split/train/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
+  val:
+    images: /path/to/pannuke_split/val/images
+    instances: /path/to/pannuke_split/val/inst_masks
+    types: /path/to/pannuke_split/val/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
