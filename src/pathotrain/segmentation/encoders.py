@@ -44,6 +44,28 @@ def token_grids(
     return [norm(hidden[i][:, -gh * gw :]).transpose(1, 2).reshape(b, -1, gh, gw) for i in layers]
 
 
+def adapt_backbone(
+    backbone: nn.Module, freeze: bool, adaptation: dict | None
+) -> tuple[nn.Module, bool]:
+    """Set which weights of ``backbone`` train and return the backbone to use (a peft
+    model for LoRA) and whether it runs without gradients.
+
+    Without ``adaptation``, ``freeze`` keeps it fixed or trains it whole. ``adaptation``
+    is histossl's (:func:`~pathotrain.histossl.adaptation.apply_adaptation`), e.g.
+    ``{type: lora, rank: 8}`` (LoRA on every linear layer of the blocks; needs peft),
+    ``{type: lora, rank: 16, targets: [q_proj, v_proj]}``, ``{type: full}`` or
+    ``{type: frozen}``; it overrides ``freeze``.
+    """
+    if adaptation is None:
+        backbone.requires_grad_(not freeze)
+        return backbone, freeze
+    from pathotrain.histossl.adaptation import apply_adaptation  # peft only when asked
+
+    kwargs = dict(adaptation)
+    kind = kwargs.pop("type")
+    return apply_adaptation(backbone, kind, **kwargs), kind == "frozen"
+
+
 def _resample(dim: int, channels: int, stride: int) -> nn.Sequential:
     """1x1 projection, then resample the stride-16 grid to ``stride``."""
     layers = [nn.Conv2d(dim, channels, 1)]
@@ -68,6 +90,8 @@ class ViTPyramidEncoder(nn.Module, EncoderMixin):
         freeze: Keep the backbone fixed and run it without gradients (only the
             resampling and the decoder train). ``False`` fine-tunes it; then
             consider ``backbone.gradient_checkpointing_enable()``.
+        adaptation: Train the backbone partly instead, e.g. ``{type: lora, rank: 8}``;
+            see :func:`adapt_backbone`. Overrides ``freeze``.
     """
 
     def __init__(
@@ -78,6 +102,7 @@ class ViTPyramidEncoder(nn.Module, EncoderMixin):
         freeze: bool = True,
         depth: int = 5,
         output_stride: int = 32,
+        adaptation: dict | None = None,
     ) -> None:
         super().__init__()
         if not 1 <= depth <= 5 or output_stride not in (8, 16, 32):
@@ -104,8 +129,7 @@ class ViTPyramidEncoder(nn.Module, EncoderMixin):
             _resample(cfg.hidden_size, c, min(s, output_stride))
             for c, s in zip(channels, (4, 8, 16, 32), strict=True)
         )
-        self.freeze = freeze
-        self.backbone.requires_grad_(not freeze)
+        self.backbone, self.freeze = adapt_backbone(self.backbone, freeze, adaptation)
         self._depth = depth
         self._in_channels = 3
         self._output_stride = output_stride
@@ -150,4 +174,10 @@ def build_fm_model(
         del smp.encoders.encoders[name]
 
 
-__all__ = ["FOUNDATION_MODELS", "ViTPyramidEncoder", "build_fm_model", "token_grids"]
+__all__ = [
+    "FOUNDATION_MODELS",
+    "ViTPyramidEncoder",
+    "adapt_backbone",
+    "build_fm_model",
+    "token_grids",
+]

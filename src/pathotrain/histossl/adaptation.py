@@ -41,10 +41,13 @@ LORA_TARGETS = (
 def block_linears(model: nn.Module) -> list[str]:
     """The names of the linear layers in the model's transformer blocks, e.g.
     ``["down_proj", "gate_proj", ..., "v_proj"]`` for Midnight; the same once LoRA
-    adapters are in (their own layers are not counted)."""
+    adapters are in (their own layers are not counted). Blocks are DINOv2's
+    ``encoder.layer.<i>`` or SAM 3's ``layers.<i>``."""
     names = set()
     for name, module in model.named_modules():
-        if not isinstance(module, nn.Linear) or not re.search(r"encoder\.layer\.\d+\.", name):
+        if not isinstance(module, nn.Linear) or not re.search(
+            r"(?:encoder\.layer|layers)\.\d+\.", name
+        ):
             continue
         if ".lora_" in name:  # an adapter's A or B
             continue

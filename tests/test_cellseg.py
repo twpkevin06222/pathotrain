@@ -22,7 +22,7 @@ def _cellvit(**kwargs):
     ("name", "kwargs"),
     [
         ("cellseg:hovernet", {"encoder_weights": None}),
-        ("cellseg:hovernext", {"encoder": "convnextv2_atto"}),
+        ("cellseg:hovernext", {"encoder": "convnextv2_atto", "encoder_weights": None}),
     ],
 )
 def test_cnn_cell_models_give_full_resolution_logits(name, kwargs):

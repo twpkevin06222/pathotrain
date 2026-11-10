@@ -15,6 +15,10 @@ The Midnight models load as ``transformers.Dinov2Model`` (one CLS token, no
 registers). Patch tokens are the last ``(H/14) * (W/14)`` tokens of either.
 
 Revisions are pinned so the weights never change under a run.
+
+``SAM_MODELS`` holds dense-only backbones, for segmentation and cellseg encoders:
+``sam3``, SAM 3's image encoder (gated, SAM License; see :mod:`pathotrain.pathofm.sam3`).
+They have no CLS token, so :func:`classification_embedding` refuses them.
 """
 
 from dataclasses import dataclass
@@ -27,6 +31,7 @@ from torchvision import transforms
 from transformers import Dinov2Model, Dinov2WithRegistersConfig, Dinov2WithRegistersModel
 
 from pathotrain.dataloader.augmentation import IMAGENET_MEAN, IMAGENET_STD
+from pathotrain.pathofm.sam3 import SAM3_REPO, SAM3_REVISION, Sam3Backbone, load_sam3
 
 # The Midnight models normalise with mean = std = 0.5, not ImageNet statistics.
 MIDNIGHT_MEAN = (0.5, 0.5, 0.5)
@@ -64,15 +69,20 @@ FOUNDATION_MODELS = {
 }
 
 
+# Dense backbones: no CLS token, for segmentation encoders only.
+SAM_MODELS = {"sam3": FoundationModel(SAM3_REPO, SAM3_REVISION)}
+
+
 def load_backbone(
     name: str, dtype: torch.dtype = torch.float32
-) -> Dinov2Model | Dinov2WithRegistersModel:
-    """Download (once, into the Hugging Face cache) and return the backbone, its
-    weights in ``dtype`` (fp32 by default)."""
+) -> Dinov2Model | Dinov2WithRegistersModel | Sam3Backbone:
+    """Download (once, into the Hugging Face cache) and return the backbone of
+    ``FOUNDATION_MODELS`` or ``SAM_MODELS``, its weights in ``dtype`` (fp32 by default)."""
+    if name in SAM_MODELS:
+        return load_sam3(dtype, SAM_MODELS[name].revision)
     if name not in FOUNDATION_MODELS:
-        raise ValueError(
-            f"unknown foundation model {name!r}, expected one of {sorted(FOUNDATION_MODELS)}"
-        )
+        known = sorted(FOUNDATION_MODELS) + sorted(SAM_MODELS)
+        raise ValueError(f"unknown foundation model {name!r}, expected one of {known}")
     fm = FOUNDATION_MODELS[name]
     if fm.timm:
         path = hf_hub_download(fm.repo_id, "model.safetensors", revision=fm.revision)
@@ -144,7 +154,9 @@ def from_timm_dinov2(state: dict[str, Tensor]) -> Dinov2WithRegistersModel:
 
 
 def num_prefix_tokens(model: nn.Module) -> int:
-    """Tokens before the patch tokens: the CLS token and any registers."""
+    """Tokens before the patch tokens: the CLS token and any registers (none for SAM 3)."""
+    if isinstance(model, Sam3Backbone):
+        return 0
     return 1 + getattr(model.config, "num_register_tokens", 0)
 
 
@@ -172,6 +184,8 @@ def classification_embedding(model: Dinov2Model, pixel_values: Tensor) -> Tensor
     """Tile embedding of the model cards: CLS token concatenated with the mean
     patch token (registers left out), ``(B, 3072)``. No spatial information; for
     classification."""
+    if num_prefix_tokens(model) == 0:
+        raise ValueError(f"{type(model).__name__} has no CLS token; use it for dense tasks only")
     tokens = model(pixel_values=pixel_values).last_hidden_state
     return torch.cat([tokens[:, 0], tokens[:, num_prefix_tokens(model) :].mean(1)], dim=-1)
 

@@ -66,6 +66,13 @@ MIT licensed and not gated, so no Hugging Face login is needed.
 |---|---|---|
 | `midnight-12k` | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | DINOv2 ViT-g/14, 1.1B parameters, 1536-dim tokens |
 | `spectra-midnight-12k` | [medarc/Midnight-12k-SPECTRA](https://huggingface.co/medarc/Midnight-12k-SPECTRA) | the same network, tuned for robustness to scanner, stain and centre |
+| `sam3` | [facebook/sam3](https://huggingface.co/facebook/sam3) | SAM 3's image encoder, ViT-L/14, 446M parameters, 1024-dim tokens. Gated, SAM License (see the [pathofm README](../pathofm/README.md#sam-3-dense-backbone-gated)); mean = std = 0.5 |
+
+`encoder_kwargs` configures the encoder: `layers`, `channels`, `freeze` and
+`adaptation`. `adaptation` trains the backbone partly, overriding `freeze`:
+`{type: lora, rank: 8}` puts LoRA adapters on every linear layer of its blocks (needs
+peft), and `targets: [q_proj, v_proj]` narrows them. `{type: full}` and `{type: frozen}`
+are the same as `freeze: false` and `freeze: true`.
 
 ```python
 from pathotrain.dataloader.augmentation import eval_transform, train_transform

@@ -8,16 +8,16 @@ Three ways to train:
 
 | What | Command | Config |
 |---|---|---|
-| Semantic: a nucleus type per pixel | `python -m pathotrain.segmentation.train` | `config.example.yaml` |
-| Instance: each nucleus and its type (HoVer-Net style) | `python -m pathotrain.cellseg.train` (`.eval`, `.export`) | `instance.example.yaml` |
-| CellViT++ cell classifier on frozen foundation-model tokens | `python -m pathotrain.cellseg.classify` | `classify.example.yaml` |
+| Semantic: a nucleus type per pixel | `python -m pathotrain.segmentation.train` | `configs/config.example.yaml` |
+| Instance: each nucleus and its type (HoVer-Net style) | `python -m pathotrain.cellseg.train` (`.eval`, `.export`) | `configs/instance.example.yaml` |
+| CellViT++ cell classifier on frozen foundation-model tokens | `python -m pathotrain.cellseg.classify` | `configs/classify.example.yaml` |
 
 ## Models
 
 | `model.name` | Paper | Encoder | Decoder |
 |---|---|---|---|
 | `cellseg:hovernet` | HoVer-Net, Graham et al. 2019 | pre-activation ResNet-50 (timm `resnetv2_50`), stride-1 stem | HoVer-Net dense decoder ("fast" mode, padded convs), one per branch |
-| `cellseg:hovernext` | HoVer-NeXt, Baumann et al. 2024 | ConvNeXt-V2 (timm, `encoder`) | U-Net (SMP), shared by the branches |
+| `cellseg:hovernext` | HoVer-NeXt, Baumann et al. 2024 | ConvNeXt (timm, `encoder`; ConvNeXt-V2 in the paper) | U-Net (SMP), shared by the branches |
 | `cellseg:cellvit` | CellViT, Hörst et al. 2024 | `pathofm` ViT (`backbone`), four layers | CellViT transposed-conv decoder, one per branch |
 
 A semantic model outputs the nuclear-type (NT) logits, `(B, num_classes, H, W)`. An
@@ -29,13 +29,16 @@ Options per model:
 
 - **hovernet:** `encoder_weights: imagenet` (timm, Apache-2.0) or `null`. Input
   sides must be divisible by 8.
-- **hovernext:** `encoder` (default `convnextv2_base`), `encoder_weights` (default
-  `null`: timm's ConvNeXt-V2 ImageNet weights are CC-BY-NC-4.0). For an Apache-2.0
-  pretrained encoder, use `encoder: convnext_base` with `encoder_weights: imagenet`.
-  Other keys go to `smp.Unet`.
-- **cellvit:** `backbone` (e.g. `midnight-12k`; then set `mean`/`std` to `MIDNIGHT_*`),
-  `layers` (four 1-based layers, default evenly spaced), `freeze` (default `true`),
-  `skip_dims`, `bottleneck_dim`. Input sides must be divisible by 16.
+- **hovernext:** `encoder` (default `convnext_base`), `encoder_weights` (default
+  `imagenet`: timm's `fb_in22k_ft_in1k` weights, Apache-2.0; `null` from scratch). The
+  paper's ConvNeXt-V2 (`encoder: convnextv2_base`) has ImageNet weights under
+  CC-BY-NC-4.0 only. Other keys go to `smp.Unet`.
+- **cellvit:** `backbone` (`midnight-12k`, `sam3`, ...; both normalise with
+  `MIDNIGHT_MEAN` / `MIDNIGHT_STD`), `layers` (four 1-based layers, default evenly
+  spaced), `freeze` (default `true`), `adaptation` (e.g. `{type: lora, rank: 8}` to
+  fine-tune the backbone with LoRA, needs peft; overrides `freeze`), `skip_dims`,
+  `bottleneck_dim`. Input sides must be divisible by 16. `sam3` is gated and under the
+  SAM License (see the pathofm README).
 
 ## Instance segmentation
 
@@ -71,16 +74,25 @@ weights to `model.onnx.data`, which must stay beside the graph.
 
 ## CellViT++ cell classifier
 
-`cellseg.classify` embeds each ground-truth cell as the mean of a frozen `pathofm`
-encoder's tokens over the 16 px patches it covers, weighted by its area in each. It then
-trains a linear or MLP head (pathocls's `Head`) on those embeddings. New cell classes
-need only this small head, not a new segmentation model. Metrics are pathocls's:
-`val/balanced_acc`, `val/macro_f1`, `val/recall_<class>`, and so on.
+`cellseg.classify` follows CellViT++ (Hörst et al. 2025). New cell classes need only a
+small head on a frozen CellViT, not a new segmentation model:
 
-At inference, `classify_cells(backbone, head, image, instances)` types the nuclei of a
-predicted instance map. `load_head(best.ckpt)` returns the head and its config, which
-names the backbone. The head trains on ground-truth cells; CellViT++ trains on detected
-cells matched to the ground truth.
+1. A `cellseg:cellvit` instance model trained with `cellseg.train` (`model.checkpoint`,
+   frozen) detects each tile's cells. The same forward pass gives its encoder's deepest
+   tokens.
+2. A cell's embedding is the mean of the tokens of the 16 px patches its bounding box
+   touches.
+3. Detected cells are paired one to one with ground-truth cells by centroid distance
+   (Hungarian, within `match_radius`, 15 px), and take the paired cell's type.
+4. The embeddings are computed once, without augmentation, and a head trains on them:
+   pathocls's `Head` (an MLP of width `head.hidden`, 100 as CellViT++), with pathocls's
+   metrics (`val/balanced_acc`, `val/macro_f1`, `val/recall_<class>`, ...).
+
+The training log records how many cells were detected, how many are in the ground truth
+and how many were paired. At inference,
+`classify_cells(detector, head, image)` detects and classifies the cells in one pass, with
+`load_detector(cfg["model"]["checkpoint"])` and `load_head(best.ckpt)`. Two differences
+from CellViT++: the head standardises its inputs and uses GELU where CellViT++ uses ReLU.
 
 ## Data
 

@@ -7,10 +7,11 @@ Pathology foundation models (FMs) as backbones for downstream tasks:
 segmentation, linear probing, fine-tuning and multiple-instance learning (MIL)
 on whole slides.
 
-Only open models are included. All are MIT or Apache-2.0 licensed and not
-gated on Hugging Face, so they need no login and can be used commercially,
-subject to their licence terms. Models with non-commercial licences, or that require access approval,
-are deliberately left out.
+The foundation models in `FOUNDATION_MODELS` are open: all are MIT or Apache-2.0
+licensed and not gated on Hugging Face, so they need no login and can be used
+commercially, subject to their licence terms. Models with non-commercial licences are
+deliberately left out. The one gated backbone, SAM 3, is kept apart in `SAM_MODELS` (see
+[SAM 3](#sam-3-dense-backbone-gated)).
 
 | Name | Weights | What it is |
 |---|---|---|
@@ -35,12 +36,36 @@ registers (`num_prefix_tokens(model)` is the CLS token plus any registers).
 The revisions are pinned in `FOUNDATION_MODELS`, so the weights never change
 under a run.
 
+## SAM 3 (dense backbone, gated)
+
+`load_backbone("sam3")` returns SAM 3's image encoder (`facebook/sam3`, Meta). It is a
+ViT-L/14 with 446M parameters, 32 layers, 1024-dim tokens, windowed attention with four
+global layers, and 2D RoPE. Only the ViT is loaded, not SAM 3's neck, detector or tracker.
+It is meant for dense use only: as a `segmentation` encoder (`encoder_name: sam3`) or a
+`cellseg:cellvit` backbone (`backbone: sam3`).
+
+- **Access:** the repo is gated. Request access on Hugging Face and log in
+  (`hf auth login`).
+- **Licence:** the SAM License. Commercial use is allowed. Anything you distribute that is
+  built on it (a fine-tuned model, for example) must go out under the SAM License, with a
+  copy of it, and publications must acknowledge SAM. It also carries trade-control
+  restrictions.
+- **No CLS token:** `classification_embedding` refuses it, which is why it isn't in
+  `FOUNDATION_MODELS` (pathocls, pathoclip and histossl assume one).
+- **Any input size:** SAM 3 runs at 1008 px, a 72 x 72 grid, and its global layers'
+  RoPE is precomputed for that grid. `Sam3Backbone` recomputes it for each input's grid,
+  scaled to the attention window as SAM 3 does. At 1008 px its output matches
+  `transformers.Sam3Model`'s encoder to float32 rounding.
+- **Normalisation:** mean = std = 0.5 (`MIDNIGHT_MEAN` / `MIDNIGHT_STD`).
+- **Fine-tuning:** with LoRA through the encoders' `adaptation` option, e.g.
+  `{type: lora, rank: 8}` (needs peft, `pip install 'pathotrain[histossl]'`).
+
 ## Loading
 
 ```python
 from pathotrain.pathofm import build_encoder, load_backbone
 
-backbone = load_backbone("midnight-12k")                # Dinov2Model, fp32
+backbone = load_backbone("midnight-12k")  # Dinov2Model, fp32
 backbone, transform = build_encoder("spectra-midnight-12k")  # + model-card preprocessing
 ```
 
