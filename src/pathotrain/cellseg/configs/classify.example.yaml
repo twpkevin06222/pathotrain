@@ -1,19 +1,22 @@
-# CellViT++ cell classifier: a head on each cell's frozen foundation-model tokens.
+# CellViT++ cell classifier: a head on the tokens of the cells a frozen CellViT detects.
 #   python -m pathotrain.cellseg.classify classify.yaml
-# Trains on the ground-truth cells of data.train, scored on data.val (val/balanced_acc,
-# val/macro_f1, val/recall_<class>, ...). Copy this file and set the paths under `data`.
+# Detected cells are paired with ground-truth cells by centroid distance and take their
+# type; the head is scored on data.val's paired cells (val/balanced_acc, val/macro_f1,
+# val/recall_<class>, ...). Copy this file and set the paths.
 
 name: cellseg-classify
 seed: 0
 output_dir: runs/cellseg-classify
-mean: MIDNIGHT_MEAN         # the backbone's normalisation
-std: MIDNIGHT_STD
+# mean/std are the detector's, from its checkpoint.
 
 model:
-  backbone: midnight-12k    # a pathotrain.pathofm model, frozen
-  num_classes: 5            # nucleus types without background (type t is class t - 1)
-  layer: null               # 1-based transformer layer for the tokens; null = last
-  head: {hidden: null, dropout: 0.0}  # hidden: e.g. 512 for an MLP head
+  # A cellseg:cellvit instance model trained with pathotrain.cellseg.train (frozen).
+  checkpoint: runs/cellseg-cellvit/checkpoints/best.ckpt
+  num_classes: 5            # cell types without background (type t is class t - 1); the
+                            # types of data's masks, which need not be the detector's
+  head: {hidden: 100, dropout: 0.0}  # CellViT++'s MLP width; hidden: null for linear
+
+match_radius: 15            # px between a detection's and a ground-truth cell's centroid
 
 task:
   lr: 1.0e-3

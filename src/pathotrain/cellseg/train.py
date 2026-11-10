@@ -3,7 +3,7 @@
     python -m pathotrain.cellseg.train instance.yaml
     python -m pathotrain.cellseg.train instance.yaml --resume runs/exp/checkpoints/last.ckpt
 
-Start from ``instance.example.yaml`` next to this module. The sections are those of
+Start from ``configs/instance.example.yaml`` beside this module. The sections are those of
 ``pathotrain.segmentation.train`` (``trainer``, ``checkpoint``, ``early_stopping``,
 ``augmentation``, ``loader``, ...), except::
 

@@ -4,13 +4,14 @@ import torch
 from PIL import Image
 from transformers import Dinov2Config, Dinov2Model
 
-from pathotrain.cellseg import CellDataset, CellInstanceTask, PanopticQuality, build_model
-from pathotrain.cellseg.classify import cell_embeddings
+from pathotrain.cellseg import CellDataset, CellInstanceTask, PanopticQuality, build_model, classify
+from pathotrain.cellseg.classify import cell_tokens, classify_cells
 from pathotrain.cellseg.instances import (
     hv_maps,
     instance_types,
     instances_from_contours,
     match,
+    pair_centroids,
     postprocess,
 )
 from pathotrain.segmentation.encoders import token_grids
@@ -89,7 +90,7 @@ def _cellvit(**kwargs):
     ("arch", "kwargs"),
     [
         ("hovernet", {"encoder_weights": None}),
-        ("hovernext", {"encoder": "convnextv2_atto"}),
+        ("hovernext", {"encoder": "convnextv2_atto", "encoder_weights": None}),
         ("cellvit", None),
     ],
 )
@@ -153,19 +154,58 @@ def test_instance_task_trains_and_scores_pq():
     )
 
 
-def test_cell_embedding_of_a_cell_filling_one_patch_is_that_token():
-    torch.manual_seed(0)
-    backbone = Dinov2Model(TINY_VIT).eval()
-    image = torch.rand(1, 3, 64, 64)
-    inst = torch.zeros(1, 64, 64, dtype=torch.long)
-    inst[0, 16:32, 32:48] = 7  # exactly patch (1, 2)
-    inst[0, 0:8, 0:8] = 3  # a quarter of patch (0, 0)
-    with torch.no_grad():
-        ((ids, emb),) = cell_embeddings(backbone, image, inst)
-        grid = token_grids(backbone, image, (4,))[0][0]
+def test_cell_tokens_average_the_patches_each_bounding_box_touches():
+    tokens = torch.arange(2 * 4 * 4, dtype=torch.float32).reshape(2, 4, 4)
+    inst = np.zeros((64, 64), np.int32)
+    inst[16:32, 32:48] = 7  # exactly patch (1, 2)
+    inst[10:20, 2:6] = 3  # rows 0-1 of column 0
+    ids, emb = cell_tokens(tokens, inst)
     assert ids.tolist() == [3, 7]
-    torch.testing.assert_close(emb[1], grid[:, 1, 2])
-    torch.testing.assert_close(emb[0], grid[:, 0, 0])
+    torch.testing.assert_close(emb[1], tokens[:, 1, 2])
+    torch.testing.assert_close(emb[0], tokens[:, 0:2, 0].mean(1))
+
+
+def test_pair_centroids_is_one_to_one_within_the_radius():
+    true = np.array([[10.0, 10.0], [10.0, 30.0], [50.0, 50.0]])
+    pred = np.array([[11.0, 29.0], [12.0, 12.0], [10.0, 20.0], [90.0, 90.0]])
+    pairs = pair_centroids(true, pred, radius=5)
+    assert sorted(map(tuple, pairs.tolist())) == [(0, 1), (1, 0)]
+    assert pair_centroids(true, pred[:0], 5).shape == (0, 2)
+
+
+def test_cellvit_returns_its_deepest_tokens_with_the_outputs():
+    model = _cellvit(instance=True).eval()
+    image = torch.rand(1, 3, 64, 64)
+    with torch.no_grad():
+        out, tokens = model(image, return_tokens=True)
+        expected = token_grids(model.backbone, image, (4,))[0]
+    assert set(out) == {"np", "hv", "nt"}
+    torch.testing.assert_close(tokens, expected)
+    head = torch.nn.Linear(32, 2)
+    ((inst, types),) = classify_cells(model, head, image)
+    assert types.shape == (inst.max() + 1,) and set(types.tolist()) <= {0, 1}
+
+
+def test_embed_cells_labels_detections_with_the_paired_ground_truth(tmp_path, monkeypatch):
+    data = _write_pannuke_tile(tmp_path)
+    cfg = {
+        "mean": [0.5] * 3,
+        "std": [0.5] * 3,
+        "model": {"num_classes": 2},
+        "data": {"train": data},
+    }
+    true = _touching_nuclei()
+    pred = np.roll(true, 3, axis=1)  # every detection 3 px off its nucleus
+    pred[60:, 60:] = 9  # and one false detection
+    ids = np.array([1, 2, 3, 9])
+
+    def detect(model, image, postprocess):
+        return [(pred, ids, torch.tensor(ids, dtype=torch.float32)[:, None])]
+
+    monkeypatch.setattr(classify, "detect_cells", detect)
+    x, y = classify.embed_cells(cfg, torch.nn.Linear(1, 1), {}, "train").tensors
+    assert x[:, 0].tolist() == [1, 2, 3]  # the false detection is unpaired
+    assert y.tolist() == [0, 1, 1]  # types 1, 2, 2 as classes
 
 
 def test_export_writes_three_branches_and_a_segmentation_card_on_nt(tmp_path):
@@ -179,11 +219,18 @@ def test_export_writes_three_branches_and_a_segmentation_card_on_nt(tmp_path):
         "name": "cells",
         "mean": [0.5, 0.5, 0.5],
         "std": [0.5, 0.5, 0.5],
-        "model": {"name": "cellseg:hovernext", "num_classes": 3, "encoder": "convnextv2_atto"},
+        "model": {
+            "name": "cellseg:hovernext",
+            "num_classes": 3,
+            "encoder": "convnextv2_atto",
+            "encoder_weights": None,
+        },
         "task": {"class_names": ["background", "tumour", "immune"]},
         "data": {"train": {"images": "i", "instances": "n", "types": "t"}},
     }
-    model = build_model("hovernext", 3, instance=True, encoder="convnextv2_atto")
+    model = build_model(
+        "hovernext", 3, instance=True, encoder="convnextv2_atto", encoder_weights=None
+    )
     torch.save({"model": model.state_dict(), "config": cfg}, tmp_path / "m.ckpt")
     (tmp_path / "out").mkdir()
     with pytest.raises(ValueError, match="mpp"):
@@ -201,3 +248,34 @@ def test_export_writes_three_branches_and_a_segmentation_card_on_nt(tmp_path):
     assert nt.shape == (2, 3, 64, 64)
     inst, types = instances_from_outputs(np_out[0], hv[0], nt[0])
     assert inst.shape == (64, 64) and len(types) == inst.max() + 1
+
+
+def test_example_configs_are_valid():
+    import inspect
+    from importlib.resources import files
+
+    from pathotrain.engine import ModelCheckpoint, TrainerConfig, load_config
+    from pathotrain.experiment import normalisation
+    from pathotrain.pathocls.model import Head
+    from pathotrain.pathocls.task import ClassificationTask
+
+    configs = files("pathotrain.cellseg") / "configs"
+    instance = load_config(configs / "instance.example.yaml")
+    normalisation(instance, "mean")
+    model = torch.nn.Conv2d(3, 1, 1)
+    CellInstanceTask(model, instance["model"]["num_classes"], **instance["task"])
+    TrainerConfig(**instance["trainer"])
+    ModelCheckpoint("unused", **instance["checkpoint"])
+    dataset_args = set(inspect.signature(CellDataset.__init__).parameters)
+    for split in ("train", "val", "test"):
+        assert set(instance["data"][split]) <= dataset_args
+
+    cls = load_config(configs / "classify.example.yaml")
+    assert {"checkpoint", "num_classes"} <= set(cls["model"])
+    head = Head(8, cls["model"]["num_classes"], **cls["model"]["head"])
+    ClassificationTask(head, cls["model"]["num_classes"], **cls["task"])
+    for split in ("train", "val"):
+        assert set(cls["data"][split]) <= dataset_args
+
+    semantic = load_config(configs / "config.example.yaml")
+    assert semantic["model"]["name"].startswith("cellseg:")

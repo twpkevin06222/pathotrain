@@ -13,8 +13,8 @@ model:
   name: cellseg:hovernet    # or cellseg:hovernext, cellseg:cellvit
   num_classes: 6            # background + 5 PanNuke nucleus types
   encoder_weights: imagenet # hovernet: timm ResNetV2-50 (Apache-2.0); null from scratch
-  # cellseg:hovernext: encoder: convnextv2_base, encoder_weights: null (its ImageNet
-  #   weights are CC-BY-NC-4.0; encoder: convnext_base + imagenet is Apache-2.0)
+  # cellseg:hovernext: encoder: convnext_base, encoder_weights: imagenet (Apache-2.0);
+  #   the paper's convnextv2_base has CC-BY-NC-4.0 ImageNet weights only
   # cellseg:cellvit: backbone: midnight-12k, freeze: true, layers: [10, 20, 30, 40]
 
 loss:

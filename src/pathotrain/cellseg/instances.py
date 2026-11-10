@@ -8,6 +8,8 @@ import math
 
 import numpy as np
 from scipy import ndimage as ndi
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 from skimage.segmentation import watershed
 
 # HoVer-Net takes HV-map gradients with a 21 px Sobel kernel (cv2), whose smoothing is a
@@ -133,6 +135,30 @@ def instances_from_outputs(
     type of each instance id. ``options`` go to :func:`postprocess`."""
     inst = postprocess(_softmax(np_logits)[1], hv, **options)
     return inst, predicted_types(inst, nt_logits)
+
+
+def centroids(
+    instances: np.ndarray, ids: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """``ids`` (default every instance id of ``instances``) and their ``(N, 2)`` centres
+    of mass, ``(y, x)``."""
+    if ids is None:
+        ids = np.unique(instances)
+        ids = ids[ids > 0]
+    if not len(ids):
+        return ids, np.zeros((0, 2))
+    return ids, np.array(ndi.center_of_mass(np.ones_like(instances), instances, ids))
+
+
+def pair_centroids(true: np.ndarray, pred: np.ndarray, radius: float) -> np.ndarray:
+    """``(K, 2)`` index pairs ``[i_true, i_pred]`` of two ``(N, 2)`` point sets: the
+    pairing with the least total distance (Hungarian), keeping pairs within ``radius``."""
+    if not len(true) or not len(pred):
+        return np.zeros((0, 2), np.int64)
+    distance = cdist(true, pred)
+    rows, cols = linear_sum_assignment(distance)
+    near = distance[rows, cols] <= radius
+    return np.stack([rows[near], cols[near]], 1)
 
 
 def match(true: np.ndarray, pred: np.ndarray) -> tuple[int, int, int, float]:

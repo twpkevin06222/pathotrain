@@ -8,7 +8,7 @@ branches as a dict (see :data:`BRANCHES`) for :mod:`pathotrain.cellseg.train`.
 - ``hovernet``: HoVer-Net (Graham et al. 2019). Pre-activation ResNet-50 encoder whose
   stem keeps full resolution, and HoVer-Net's dense decoder; its "fast" variant, with
   padded convolutions, so the output has the input's size.
-- ``hovernext``: HoVer-NeXt (Baumann et al. 2024). ConvNeXt-V2 encoder and U-Net decoder.
+- ``hovernext``: HoVer-NeXt (Baumann et al. 2024). ConvNeXt encoder and U-Net decoder.
 - ``cellvit``: CellViT (Hörst et al. 2024). A ``pathotrain.pathofm`` ViT encoder and the
   CellViT decoder. CellViT++'s cell classifier on the encoder's tokens is in
   :mod:`pathotrain.cellseg.classify`.
@@ -158,18 +158,18 @@ class HoVerNet(nn.Module):
 def hovernext(
     num_classes: int,
     in_channels: int = 3,
-    encoder: str = "convnextv2_base",
-    encoder_weights: str | None = None,
+    encoder: str = "convnext_base",
+    encoder_weights: str | None = "imagenet",
     instance: bool = False,
     **kwargs,
 ) -> nn.Module:
-    """HoVer-NeXt's network: a timm ``encoder`` (ConvNeXt-V2 in the paper) under SMP's
-    U-Net decoder; ``kwargs`` go to ``smp.Unet``. With ``instance``, the NP, HV and NT
-    branches are channel groups of one shared decoder's output (a dict).
+    """HoVer-NeXt's network: a timm ``encoder`` under SMP's U-Net decoder; ``kwargs`` go
+    to ``smp.Unet``. With ``instance``, the NP, HV and NT branches are channel groups of one
+    shared decoder's output (a dict).
 
-    ``encoder_weights`` defaults to ``None`` because timm's ConvNeXt-V2 ImageNet weights are
-    CC-BY-NC-4.0. ``encoder="convnext_base"`` with ``encoder_weights="imagenet"``
-    gives ConvNeXt (V1) ImageNet weights under Apache-2.0.
+    The default is ConvNeXt (V1) Base with timm's ImageNet weights (``fb_in22k_ft_in1k``,
+    Apache-2.0); ``encoder_weights=None`` trains from scratch. The paper's ConvNeXt-V2
+    (``encoder="convnextv2_base"``) has ImageNet weights under CC-BY-NC-4.0 only.
     """
     channels = _channels(num_classes, instance)
     model = smp.create_model(
@@ -281,8 +281,11 @@ class CellViT(nn.Module):
             {k: _CellViTBranch(dim, b, c) for k, c in _channels(num_classes, instance).items()}
         )
 
-    def forward(self, x: Tensor) -> Tensor | dict[str, Tensor]:
+    def forward(self, x: Tensor, return_tokens: bool = False):
+        """The outputs; with ``return_tokens``, also the deepest layer's tokens as a
+        ``(B, D, H/16, W/16)`` grid (CellViT++ embeds the detected cells with them)."""
         z1, z2, z3, z4 = token_grids(self.backbone, x, self.layers, self.freeze)
         skips = (self.decoder3(z3), self.decoder2(z2), self.decoder1(z1), self.decoder0(x))
         out = {k: branch(z4, *skips) for k, branch in self.branches.items()}
-        return _outputs(out, self.instance)
+        out = _outputs(out, self.instance)
+        return (out, z4) if return_tokens else out
