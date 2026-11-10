@@ -87,6 +87,18 @@ def test_tile_folder_pairs_image_and_mask_dirs_by_stem(tmp_path):
         SegmentationTileFolderDataset(images=images, masks=touch(tmp_path / "empty"))
 
 
+def test_tile_folder_pairs_names_once_prefixes_are_removed(tmp_path):
+    images, masks = tmp_path / "images", tmp_path / "masks"
+    images.mkdir()
+    masks.mkdir()
+    Image.fromarray(np.zeros((4, 4, 3), np.uint8)).save(images / "img_a.png")
+    Image.fromarray(np.zeros((4, 4), np.uint8)).save(masks / "sem_a.png")
+    ds = SegmentationTileFolderDataset(
+        images=images, masks=masks, image_prefix="img_", mask_prefix="sem_"
+    )
+    assert ds.pairs == [(images / "img_a.png", masks / "sem_a.png")]
+
+
 # Two slides with different label sets: s1 has labels 0-1, s2 has 0-3 and ignored pixels.
 _MASKS = {
     "s1": [np.array([[0, 0, 1, 1]] * 4, np.uint8), np.zeros((4, 4), np.uint8)],

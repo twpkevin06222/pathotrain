@@ -148,8 +148,9 @@ class SegmentationTileFolderDataset(Dataset):
 
     Either ``root`` written by :func:`export_segmentation_tiles` (read from ``root/tiles.csv``),
     or ``images`` and ``masks`` directories whose files are paired by stem
-    (``a.png`` with ``a.png``, or ``a.jpg`` with ``a.png``); files without a
-    partner are skipped with a warning.
+    (``a.png`` with ``a.png``, or ``a.jpg`` with ``a.png``) once ``image_prefix`` and
+    ``mask_prefix`` are removed from them (PanNuke's ``img_a.png`` with ``sem_a.png``);
+    files without a partner are skipped with a warning.
 
     Example::
 
@@ -165,6 +166,8 @@ class SegmentationTileFolderDataset(Dataset):
         images: str | Path | None = None,
         masks: str | Path | None = None,
         ignore_index: int = 255,
+        image_prefix: str = "",
+        mask_prefix: str = "",
     ) -> None:
         self.transform = transform
         self.ignore_index = ignore_index
@@ -180,7 +183,8 @@ class SegmentationTileFolderDataset(Dataset):
                 columns = _class_columns(width)
                 self.class_fraction = np.array([[float(r[c]) for c in columns] for r in rows])
             return
-        tiles, labels = by_stem([images], None), by_stem([masks], None)
+        tiles = {s.removeprefix(image_prefix): p for s, p in by_stem([images], None).items()}
+        labels = {s.removeprefix(mask_prefix): p for s, p in by_stem([masks], None).items()}
         for stem in sorted(tiles.keys() - labels.keys()):
             logger.warning("image {} has no mask, skipped", tiles[stem])
         for stem in sorted(labels.keys() - tiles.keys()):

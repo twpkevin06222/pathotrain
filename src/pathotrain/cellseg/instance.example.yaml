@@ -1,0 +1,69 @@
+# Nucleus instance segmentation and typing (HoVer-Net style) on PanNuke-style folders:
+#   python -m pathotrain.cellseg.train instance.yaml
+#   python -m pathotrain.cellseg.eval runs/cellseg-instance/checkpoints/best.ckpt
+#   python -m pathotrain.cellseg.export runs/cellseg-instance/checkpoints/best.ckpt out/model.onnx \
+#       --size 256 --mpp 0.25 --no-icc   # needs task.class_names
+# Sections not shown (early_stopping, val_loader, mlflow_db, ...) are as in
+# segmentation/config.example.yaml. Copy this file and set the paths under `data`.
+
+name: cellseg-instance
+seed: 0
+output_dir: runs/cellseg-instance
+mean: IMAGENET_MEAN         # MIDNIGHT_MEAN / MIDNIGHT_STD for cellvit on midnight-12k
+std: IMAGENET_STD
+
+model:
+  name: cellseg:hovernet    # or cellseg:hovernext, cellseg:cellvit (options as in config.example.yaml)
+  num_classes: 6            # background + 5 PanNuke nucleus types
+  encoder_weights: imagenet
+
+task:
+  lr: 1.0e-3
+  warmup_epochs: 1
+  # class_names: [background, ...]  # in your masks' label order; keys val/pq_<name>
+  # loss_weights: {np: 1.0, hv_mse: 1.0, hv_msge: 1.0, nt: 1.0}  # HoVer-Net's
+  # postprocess: {threshold: 0.5, marker_threshold: 0.4, min_size: 10}
+
+trainer:
+  max_epochs: 50
+  precision: bf16-mixed
+
+checkpoint:
+  monitor: val/mpq          # or val/bpq
+  mode: max
+
+augmentation:
+  n: 3
+  m: 5
+
+loader:
+  batch_size: 16
+  num_workers: 8
+
+# Images, instance masks and type masks paired by name once the prefixes are removed.
+# This PanNuke conversion stores nucleus outlines, not ids: contours: true derives the ids.
+data:
+  train:
+    images: /path/to/pannuke_split/train/images
+    instances: /path/to/pannuke_split/train/inst_masks
+    types: /path/to/pannuke_split/train/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
+  val:
+    images: /path/to/pannuke_split/val/images
+    instances: /path/to/pannuke_split/val/inst_masks
+    types: /path/to/pannuke_split/val/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
+  test:
+    images: /path/to/pannuke_split/test/images
+    instances: /path/to/pannuke_split/test/inst_masks
+    types: /path/to/pannuke_split/test/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true

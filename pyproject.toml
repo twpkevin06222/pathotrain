@@ -19,6 +19,8 @@ dependencies = [
     "patchology",
     "pillow>=10.0",
     "pyyaml>=6.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
     "segmentation-models-pytorch>=0.6.0",
     "torch>=2.14.0",
     "torchmetrics>=1.9.0",

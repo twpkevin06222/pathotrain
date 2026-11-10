@@ -18,7 +18,8 @@ from pathotrain.segmentation.encoders import build_fm_model
 
 
 def build_model(name: str, num_classes: int, in_channels: int = 3, **kwargs) -> nn.Module:
-    """Build ``"smp:<arch>"`` or ``"nnunet:plain"`` / ``"nnunet:resenc"``.
+    """Build ``"smp:<arch>"``, ``"nnunet:plain"`` / ``"nnunet:resenc"``, or a cell
+    segmentation network ``"cellseg:<arch>"`` (see :func:`pathotrain.cellseg.build_model`).
 
     Args:
         name: ``<library>:<architecture>``. SMP architectures are those of
@@ -42,7 +43,13 @@ def build_model(name: str, num_classes: int, in_channels: int = 3, **kwargs) -> 
         return smp.create_model(arch, in_channels=in_channels, classes=num_classes, **kwargs)
     if library == "nnunet":
         return nnunet(arch, num_classes, in_channels, **kwargs)
-    raise ValueError(f"unknown model {name!r}, expected 'smp:<arch>' or 'nnunet:<arch>'")
+    if library == "cellseg":
+        from pathotrain.cellseg import build_model as build_cell_model  # cellseg imports this
+
+        return build_cell_model(arch, num_classes, in_channels, **kwargs)
+    raise ValueError(
+        f"unknown model {name!r}, expected 'smp:<arch>', 'nnunet:<arch>' or 'cellseg:<arch>'"
+    )
 
 
 def nnunet(
