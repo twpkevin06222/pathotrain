@@ -4,13 +4,14 @@ Cell (nucleus) segmentation, written from the papers. The authors' code and trai
 weights are not used. Only encoder weights are loaded: timm ImageNet weights, or a
 `pathofm` foundation model.
 
-Three ways to train:
+Three ways to train, and one to use SAM 3 without training:
 
 | What | Command | Config |
 |---|---|---|
 | Semantic: a nucleus type per pixel | `python -m pathotrain.segmentation.train` | `configs/config.example.yaml` |
 | Instance: each nucleus and its type (HoVer-Net style) | `python -m pathotrain.cellseg.train` (`.eval`, `.export`) | `configs/instance.example.yaml` |
 | CellViT++ cell classifier on frozen foundation-model tokens | `python -m pathotrain.cellseg.classify` | `configs/classify.example.yaml` |
+| Zero-shot SAM 3 from text prompts, scored with the same PQ | `python -m pathotrain.cellseg.prompted` | `configs/prompted.example.yaml` |
 
 ## Models
 
@@ -94,14 +95,27 @@ and how many were paired. At inference,
 `load_detector(cfg["model"]["checkpoint"])` and `load_head(best.ckpt)`. Two differences
 from CellViT++: the head standardises its inputs and uses GELU where CellViT++ uses ReLU.
 
+## Zero-shot SAM 3 (text prompts)
+
+`cellseg.prompted` scores SAM 3 (`facebook/sam3`, gated, SAM License) without training. It
+finds every instance of a text concept in a tile. With one prompt per nucleus type
+(`prompts: {1: inflammatory cell, ...}`), each detection takes its prompt's type; with a
+single prompt (`prompts: cell`), nuclei are untyped. Overlaps go to the higher score.
+Every threshold in `thresholds` is scored in one pass: choose one on `val` and report it
+on `test`. Metrics match `cellseg.eval`'s, keyed `<split>/<metric>@<threshold>`.
+
+The wording of a prompt matters. On PanNuke, SAM 3 finds nuclei from "cell" but almost
+none from "nucleus", and "neoplastic cell" works far better than "tumor cell".
+
 ## Data
 
 - **Semantic** (`segmentation.train`): `images` and `masks` folders, as in
   `segmentation`. `image_prefix` / `mask_prefix` are removed before pairing, so
   PanNuke's `img_X.png` pairs with `sem_X.png`.
-- **Instance and classifier** (`CellDataset`): `images`, `instances` and `types`
-  folders, each with an optional prefix. Instance masks hold one id per nucleus. With
-  `contours: true`, they hold nucleus outlines instead, as in the PanNuke conversion at
-  `pannuke_split`, and the ids are derived: nucleus pixels inside no outline, split into
-  connected pieces, with outline pixels given to the nearest piece. Type masks hold the
-  class per pixel (0 background, 255 ignored).
+- **Instance, classifier and prompted** (`InstanceTileFolderDataset` from
+  `pathotrain.dataloader`): `images`, `instances` and `types` folders, each with an
+  optional prefix. Instance masks hold one id per nucleus. With `contours: true`, they
+  hold nucleus outlines instead, as in the PanNuke conversion at `pannuke_split`, and the
+  ids are derived (see the dataloader README). Type masks hold the class per pixel
+  (0 background, 255 ignored). `cellseg.train` adds HoVer-Net's HV maps to each target
+  with `cellseg.instances.add_hv_maps`, in the loader workers after augmentation.

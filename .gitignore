@@ -12,6 +12,7 @@ build/
 HANDOFF.md
 HISTOSSL_DESIGN.md
 PATHOVLM_DESIGN.md
+PATHOSAM_DESIGN.md
 # MLflow local tracking.
 mlruns/
 mlflow.db

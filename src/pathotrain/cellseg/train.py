@@ -10,7 +10,7 @@ Start from ``configs/instance.example.yaml`` beside this module. The sections ar
     model: {name: cellseg:hovernet, num_classes: 6, ...}  # build_model(..., instance=True)
     task?: {...}         # CellInstanceTask (lr, loss_weights, postprocess, class_names, ...)
     data:
-      train: {images: dir, instances: dir, types: dir, ...}  # CellDataset
+      train: {images: dir, instances: dir, types: dir, ...}  # InstanceTileFolderDataset
       val?: {...}
       test?: {...}       # scored only by pathotrain.cellseg.eval
 
@@ -24,22 +24,26 @@ import torch
 from torch import nn
 
 from pathotrain import experiment
-from pathotrain.cellseg.data import CellDataset
+from pathotrain.cellseg.instances import add_hv_maps
 from pathotrain.cellseg.models import build_model
 from pathotrain.cellseg.task import CellInstanceTask
+from pathotrain.dataloader import InstanceTileFolderDataset
 from pathotrain.dataloader.augmentation import eval_transform, train_transform
 from pathotrain.engine import load_config
 from pathotrain.experiment import normalisation
 
 
-def build_dataset(cfg: dict, split: str, train: bool = False) -> CellDataset:
-    """``data[split]``, augmented as ``augmentation`` says when ``train``."""
+def build_dataset(cfg: dict, split: str, train: bool = False) -> InstanceTileFolderDataset:
+    """``data[split]`` with HoVer-Net's HV maps in each target, augmented as
+    ``augmentation`` says when ``train``."""
     norm = {"mean": normalisation(cfg, "mean"), "std": normalisation(cfg, "std")}
     if train:
         transform = train_transform(**norm, **cfg.get("augmentation", {}))
     else:
         transform = eval_transform(**norm)
-    return CellDataset(transform=transform, **cfg["data"][split])
+    return InstanceTileFolderDataset(
+        transform=transform, target_transform=add_hv_maps, **cfg["data"][split]
+    )
 
 
 def build_task(cfg: dict, pretrained: bool = True) -> CellInstanceTask:

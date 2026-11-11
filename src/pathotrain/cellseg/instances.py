@@ -7,6 +7,7 @@ nucleus. A type map gives each pixel its class, 0 for background.
 import math
 
 import numpy as np
+import torch
 from scipy import ndimage as ndi
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cdist
@@ -16,22 +17,6 @@ from skimage.segmentation import watershed
 # binomial of variance 20 / 4 = 5: here a Gaussian derivative of that sigma. The maps
 # are min-max scaled afterwards, so the kernel's scale does not matter.
 SOBEL_SIGMA = math.sqrt(5)
-
-
-def instances_from_contours(contours: np.ndarray, types: np.ndarray) -> np.ndarray:
-    """Instance map from a nucleus outline map (nonzero on 1 px outlines, as in some
-    PanNuke conversions) and the type map.
-
-    Nucleus pixels inside no outline split into 4-connected instances; outline pixels on
-    a nucleus then go to the nearest instance. Nucleus pixels are where ``types`` is in
-    ``1..254`` (255 is ignored).
-    """
-    nuclei = (types > 0) & (types != 255)
-    seeds, _ = ndi.label(nuclei & (contours == 0))
-    if not seeds.any():
-        return seeds
-    nearest = ndi.distance_transform_edt(seeds == 0, return_distances=False, return_indices=True)
-    return np.where(nuclei, seeds[tuple(nearest)], 0)
 
 
 def instance_types(instances: np.ndarray, types: np.ndarray, num_classes: int) -> np.ndarray:
@@ -68,6 +53,13 @@ def hv_maps(instances: np.ndarray) -> np.ndarray:
                 offset[pos] /= offset[pos].max()
             hv[channel][box][inside] = offset
     return hv
+
+
+def add_hv_maps(target: dict) -> dict:
+    """``target`` with the HV maps of its ``inst`` map as ``hv``, ``(2, H, W)`` float32: the
+    ``target_transform`` of an ``InstanceTileFolderDataset`` for HoVer-Net-style training.
+    It runs in the loader workers, after augmentation."""
+    return {**target, "hv": torch.from_numpy(hv_maps(target["inst"].numpy()))}
 
 
 def _minmax(x: np.ndarray) -> np.ndarray:
