@@ -25,7 +25,8 @@ with prompts simulated from the ground truth (``data[split]``, an
   the type, overlaps go to the higher score, and the result is scored like
   ``pathotrain.cellseg.eval`` (``bpq``, ``mpq``, ``pq_<type>``, ``dq``, ``sq``) at every
   threshold in ``thresholds``. The example nucleus is itself counted, as an annotator's box
-  would be.
+  would be. With ``exemplar.prompts`` (a text per type, as ``pathotrain.cellseg.prompted``'s),
+  each example box goes with its type's text, and the metrics are keyed ``exemplar_text``.
 
 The tile is encoded once and reused for every prompt. Metrics print as JSON keyed
 ``<split>/<evaluation>/<metric>``. Fine-tuning validates with the same ``tracker`` code.
@@ -185,7 +186,8 @@ def nuclei(inst: np.ndarray, min_size: int) -> list[int]:
 
 
 class Exemplar:
-    """``Sam3Model`` prompted with example boxes: all objects like the example."""
+    """``Sam3Model`` prompted with example boxes, alone or with text: all objects like the
+    example (and the text)."""
 
     def __init__(self, device: str, revision: str = SAM3_REVISION) -> None:
         from transformers import Sam3Model, Sam3Processor
@@ -197,17 +199,25 @@ class Exemplar:
 
     @torch.no_grad()
     def detect(
-        self, image: Image.Image, boxes: list[np.ndarray], threshold: float, mask_threshold: float
+        self,
+        image: Image.Image,
+        boxes: list[np.ndarray],
+        threshold: float,
+        mask_threshold: float,
+        texts: list[str | None] | None = None,
     ) -> list[list[tuple[float, np.ndarray]]]:
-        """Per example box, the ``(score, mask)`` detections scoring at least ``threshold``."""
+        """Per example box, the ``(score, mask)`` detections scoring at least ``threshold``.
+        ``texts`` (one per box) prompts each box together with that text; without it, or for a
+        None entry, the box alone (SAM 3's processor then uses the text "visual")."""
         pixels = self.processor(images=image, return_tensors="pt")["pixel_values"]
         autocast = torch.autocast("cuda", torch.bfloat16, enabled=self.device == "cuda")
         out = []
         with autocast:
             vision = self.model.get_vision_features(pixel_values=pixels.to(self.device))
-            for b in boxes:
+            for b, text in zip(boxes, texts or [None] * len(boxes), strict=True):
                 prompt = self.processor(
                     images=image,
+                    text=text,
                     input_boxes=[[b.tolist()]],
                     input_boxes_labels=[[1]],
                     return_tensors="pt",
@@ -254,6 +264,8 @@ def evaluate(
     if run_exemplar:
         e_cfg = cfg.get("exemplar", {})
         exemplar = Exemplar(device)
+        texts = {int(k): v for k, v in (e_cfg.get("prompts") or {}).items()}
+        e_name = "exemplar_text" if texts else "exemplar"
         thresholds = sorted(e_cfg.get("thresholds", [0.5]))
         num_classes = cfg["num_classes"]
         pq = {t: PanopticQuality(num_classes) for t in thresholds}
@@ -269,7 +281,13 @@ def evaluate(
             present = sorted({int(kinds[k]) for k in ids} - {0})
             examples = [box(inst == rng.choice([k for k in ids if kinds[k] == c])) for c in present]
             pil = Image.open(dataset.samples[i][0]).convert("RGB")
-            found = exemplar.detect(pil, examples, thresholds[0], e_cfg.get("mask_threshold", 0.5))
+            found = exemplar.detect(
+                pil,
+                examples,
+                thresholds[0],
+                e_cfg.get("mask_threshold", 0.5),
+                [texts.get(c) for c in present] if texts else None,
+            )
             for t in thresholds:
                 kept = [
                     (s, m, c)
@@ -289,10 +307,10 @@ def evaluate(
         for t in thresholds:
             r = pq[t].compute()
             metrics |= {
-                f"{split}/exemplar/{k}@{t}": r[k].item() for k in ("bpq", "mpq", "dq", "sq")
+                f"{split}/{e_name}/{k}@{t}": r[k].item() for k in ("bpq", "mpq", "dq", "sq")
             }
             per_type = zip(names[1:], r["pq"][1:], strict=True)
-            metrics |= {f"{split}/exemplar/pq_{n}@{t}": v.item() for n, v in per_type}
+            metrics |= {f"{split}/{e_name}/pq_{n}@{t}": v.item() for n, v in per_type}
     return metrics
 
 

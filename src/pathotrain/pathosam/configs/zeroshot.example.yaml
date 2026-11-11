@@ -18,6 +18,12 @@ tracker:
 exemplar:
   thresholds: [0.4, 0.5, 0.6, 0.7, 0.8]  # detection scores, all scored in one pass
   mask_threshold: 0.5
+  # prompts:                # optional: each example box goes with its type's text too
+  #   1: inflammatory cell   # (metrics keyed exemplar_text instead of exemplar)
+  #   2: connective tissue cell
+  #   3: dead cell
+  #   4: epithelial cell
+  #   5: neoplastic cell
 
 num_classes: 6              # types plus background, for the exemplar's PQ
 # Label order of the pannuke_split conversion (neoplastic is label 5).

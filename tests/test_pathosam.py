@@ -170,6 +170,46 @@ def test_validation_scores_clicks_and_checkpoints_hold_the_trained_parts(monkeyp
         torch.testing.assert_close(loaded.state_dict()[k], v)
 
 
+def test_exemplar_sends_each_box_with_its_types_text(monkeypatch, tmp_path):
+    from PIL import Image
+
+    from pathotrain.pathosam import eval as pathosam_eval
+
+    inst = np.zeros((32, 32), np.uint8)
+    inst[2:10, 2:10], inst[20:30, 20:30] = 1, 2
+    types = np.where(inst == 1, 1, np.where(inst == 2, 4, 0)).astype(np.uint8)
+    for folder, array in (
+        ("img", np.zeros((32, 32, 3), np.uint8)),
+        ("inst", inst),
+        ("type", types),
+    ):
+        (tmp_path / folder).mkdir()
+        Image.fromarray(array).save(tmp_path / folder / "a.png")
+    calls = []
+
+    class FakeExemplar:  # finds exactly the true nuclei of the example's type
+        def __init__(self, device):
+            pass
+
+        def detect(self, image, boxes, threshold, mask_threshold, texts=None):
+            calls.append(texts)
+            return [[(0.9, inst == (1 if t == "inflammatory cell" else 2))] for t in texts]
+
+    monkeypatch.setattr(pathosam_eval, "Exemplar", FakeExemplar)
+    data = {"images": tmp_path / "img", "instances": tmp_path / "inst", "types": tmp_path / "type"}
+    cfg = {
+        "num_classes": 6,
+        "data": {"val": data},
+        "exemplar": {
+            "thresholds": [0.5],
+            "prompts": {1: "inflammatory cell", 4: "epithelial cell"},
+        },
+    }
+    metrics = pathosam_eval.evaluate(cfg, "val", only="exemplar")
+    assert calls == [["inflammatory cell", "epithelial cell"]]  # types present, in order
+    assert metrics["val/exemplar_text/bpq@0.5"] == 1 and metrics["val/exemplar_text/mpq@0.5"] == 1
+
+
 def test_example_config_is_valid():
     import inspect
     from importlib.resources import files
