@@ -66,9 +66,9 @@ watershed runs outside the graph. On one tile's outputs,
 `cellseg.instances.instances_from_outputs(np[i], hv[i], nt[i])` returns the instance map
 and each instance's type, the same code validation uses.
 
-`model_card.json` is written beside the graph and embedded in it. pathoinfer has no
-instance task, so the card is a segmentation card on `nt`: pathoinfer runs the file as a
-per-pixel nucleus-type map, and `pathoinfer card validate` accepts the folder. Classes need
+`model_card.json` is written beside the graph and embedded in it. It is an instance card
+(`task: instance`, outputs `np`, `hv`, `nt`): pathoinfer runs the same watershed per tile
+and writes typed nucleus polygons as GeoJSON and Parquet. Classes need
 names (`task.class_names`). Tile folders record no resolution, so `--mpp`,
 `--icc`/`--no-icc` and `--size` are required. A ViT-g CellViT writes its 4.8 GB of
 weights to `model.onnx.data`, which must stay beside the graph.
