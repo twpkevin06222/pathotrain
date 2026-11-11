@@ -1,8 +1,11 @@
 import numpy as np
 import pytest
+import torch
 
 from pathotrain.pathosam import box, center_click, corrective_click
-from pathotrain.pathosam.eval import tracker_metrics
+from pathotrain.pathosam.eval import ClickMetrics
+from pathotrain.pathosam.model import InteractiveSam
+from pathotrain.pathosam.task import InteractiveTask, _boxes, _dice, _sample
 
 
 def _square(y0, y1, x0, x1, size=32):
@@ -42,7 +45,7 @@ def test_corrective_click_goes_to_the_deeper_error():
     assert corrective_click(true, true) is None
 
 
-def test_tracker_metrics_count_clicks_and_failures():
+def test_click_metrics_count_clicks_and_failures():
     curves = np.array(
         [
             [0.80, 0.86, 0.91],  # 85% at click 2, 90% at click 3
@@ -50,12 +53,121 @@ def test_tracker_metrics_count_clicks_and_failures():
             [0.50, 0.60, 0.70],  # never: counts as 3 clicks
         ]
     )
-    m = tracker_metrics({0.0: np.array([0.9, 0.8, 0.7])}, curves)
-    assert m["iou_box@0.0"] == pytest.approx(0.8)
-    assert m["iou@1"] == pytest.approx(0.74)
-    assert m["noc@85"] == pytest.approx((2 + 1 + 3) / 3)
-    assert m["noc@90"] == pytest.approx((3 + 1 + 3) / 3)
-    assert m["fail@90"] == pytest.approx(1 / 3) and m["objects"] == 3
+    metric = ClickMetrics([0.0], 3)
+    metric.update({0.0: np.array([0.9, 0.8])}, curves[:2])  # summed over updates (and ranks)
+    metric.update({0.0: np.array([0.7])}, curves[2:])
+    m = metric.compute()
+    assert m["iou_box_0.0"] == pytest.approx(0.8)
+    assert m["iou_click1"] == pytest.approx(0.74)
+    assert m["noc85"] == pytest.approx((2 + 1 + 3) / 3)
+    assert m["noc90"] == pytest.approx((3 + 1 + 3) / 3)
+    assert m["fail90"] == pytest.approx(1 / 3) and m["objects"] == 3
+
+
+def test_training_boxes_match_the_eval_boxes_and_clicks_land_in_the_region():
+    masks = torch.from_numpy(np.stack([_square(4, 14, 8, 28), _square(0, 5, 0, 5)]))
+    assert _boxes(masks, 0.0).tolist() == [box(m).tolist() for m in masks.numpy()]
+    region = torch.from_numpy(np.stack([_square(10, 12, 20, 22), np.zeros((32, 32), bool)]))
+    for _ in range(20):
+        xy, some = _sample(region)
+        x, y = xy[0].long()
+        assert region[0, y, x] and some.tolist() == [True, False]
+    assert _dice(torch.full((1, 4, 4), 20.0), torch.ones(1, 4, 4)).item() < 1e-3
+
+
+def _tiny_sam(monkeypatch):
+    """InteractiveSam on a tiny random Sam3TrackerModel (112 px input), built offline."""
+    from transformers import Sam3TrackerConfig, Sam3TrackerModel, Sam3VisionConfig, Sam3ViTConfig
+
+    vit = Sam3ViTConfig(
+        hidden_size=32,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        intermediate_size=64,
+        global_attn_indexes=[1, 3],
+        window_size=4,
+        image_size=112,
+        pretrain_image_size=56,
+    )
+    vision = Sam3VisionConfig(
+        backbone_config=vit, fpn_hidden_size=32, backbone_feature_sizes=[[32, 32], [16, 16], [8, 8]]
+    )
+    config = Sam3TrackerConfig(
+        vision_config=vision,
+        prompt_encoder_config={"hidden_size": 32, "image_size": 112, "patch_size": 14},
+        mask_decoder_config={
+            "hidden_size": 32,
+            "num_attention_heads": 4,
+            "mlp_dim": 64,
+            "iou_head_hidden_dim": 32,
+        },
+    )
+
+    def build(*args, **kwargs):
+        torch.manual_seed(0)
+        return Sam3TrackerModel(config)
+
+    monkeypatch.setattr(Sam3TrackerModel, "from_pretrained", build)
+    return InteractiveSam()
+
+
+def _batch():
+    inst = torch.zeros(2, 64, 64, dtype=torch.long)
+    inst[0, 4:20, 4:20], inst[0, 30:50, 10:30], inst[1, 8:40, 20:44] = 1, 2, 5
+    return torch.randn(2, 3, 64, 64), {"inst": inst, "type": (inst > 0).long()}
+
+
+@pytest.mark.parametrize("box_share", [0.0, 1.0])  # a first click, or a first box
+def test_training_step_trains_the_decoder_only(monkeypatch, box_share):
+    task = InteractiveTask(_tiny_sam(monkeypatch), objects=2, rounds=3, box_share=box_share)
+    loss, logs = task.training_step(_batch())
+    assert torch.isfinite(loss) and set(logs) == {"loss", "focal", "dice", "iou"}
+    loss.backward()
+    sam = task.model.sam
+    assert all(p.grad is None for p in sam.vision_encoder.parameters())
+    assert any(p.grad is not None for p in sam.mask_decoder.parameters())
+
+
+def test_iou_loss_trains_the_predicted_iou_of_every_mask(monkeypatch):
+    # Inference keeps the mask with the best predicted IoU, so every mask's score must train.
+    task = InteractiveTask(_tiny_sam(monkeypatch), objects=2, rounds=1, box_share=0.0)
+    task.weights = {"focal": 0.0, "dice": 0.0, "iou": 1.0}
+    scores = []
+
+    def keep(module, args, kwargs, output):
+        if isinstance(output, tuple):  # a decoder call: (mask logits, predicted IoUs)
+            output[1].retain_grad()
+            scores.append(output[1])
+
+    task.model.register_forward_hook(keep, with_kwargs=True)
+    loss, _ = task.training_step(_batch())
+    loss.backward()
+    (iou_pred,) = scores  # one round, three masks per object
+    assert iou_pred.shape[1] == 3 and (iou_pred.grad.abs() > 0).all()
+
+
+def test_validation_scores_clicks_and_checkpoints_hold_the_trained_parts(monkeypatch, tmp_path):
+    from mlflow.utils.validation import _validate_metric_name
+
+    from pathotrain.engine import trainable_state
+    from pathotrain.pathosam.train import load_model
+
+    task = InteractiveTask(_tiny_sam(monkeypatch), val_clicks=3)
+    with torch.no_grad():
+        task.validation_step(_batch())
+    metrics = task.compute_metrics()
+    assert {"val/iou_box_0.0", "val/iou_click3", "val/noc90", "val/fail85"} <= set(metrics)
+    for name in metrics:  # MLflow refuses some characters (e.g. "@") and stops the run
+        _validate_metric_name(name)
+    state = trainable_state(task.model)
+    assert state and not any(k.startswith("sam.vision_encoder.") and "weight" in k for k in state)
+    for v in state.values():
+        if v.is_floating_point():
+            v.add_(1.0)  # differ from a freshly built model
+    torch.save({"model": state, "config": {}}, tmp_path / "m.ckpt")
+    loaded, _ = load_model(tmp_path / "m.ckpt")
+    for k, v in state.items():
+        torch.testing.assert_close(loaded.state_dict()[k], v)
 
 
 def test_example_config_is_valid():
@@ -65,8 +177,13 @@ def test_example_config_is_valid():
     from pathotrain.dataloader import InstanceTileFolderDataset
     from pathotrain.engine import load_config
 
-    cfg = load_config(files("pathotrain.pathosam") / "configs" / "zeroshot.example.yaml")
+    configs = files("pathotrain.pathosam") / "configs"
     args = set(inspect.signature(InstanceTileFolderDataset.__init__).parameters)
+    cfg = load_config(configs / "zeroshot.example.yaml")
     for split in ("val", "test"):
         assert set(cfg["data"][split]) <= args
     assert len(cfg["class_names"]) == cfg["num_classes"]
+    train = load_config(configs / "interactive.example.yaml")
+    assert set(train["task"]) <= set(inspect.signature(InteractiveTask.__init__).parameters)
+    for split in ("train", "val"):
+        assert set(train["data"][split]) <= args
