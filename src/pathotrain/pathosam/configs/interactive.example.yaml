@@ -1,0 +1,63 @@
+# Fine-tune SAM 3's point and box model for interactive segmentation:
+#   python -m pathotrain.pathosam.train interactive.yaml
+#   python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker \
+#       --checkpoint runs/pathosam-interactive/checkpoints/best.ckpt
+# Needs access to the gated facebook/sam3 (SAM License): a model fine-tuned from it must be
+# distributed under that licence. Copy this file and set the paths under `data`.
+
+name: pathosam-interactive
+seed: 0
+output_dir: runs/pathosam-interactive
+
+# model: {revision: 3c879f39826c281e95690f02c7821c4de09afae7}  # facebook/sam3, pinned
+
+# InteractiveTask: simulated sessions per step; the image encoder stays frozen.
+task:
+  objects: 16               # nuclei per tile per step
+  rounds: 4                 # first prompt, then 3 corrective clicks
+  box_share: 0.5            # share of steps starting from a box rather than a click
+  box_jitter: 0.1           # each box side moved by up to this share of its size
+  focal: 20.0               # loss weights, as SAM
+  dice: 1.0
+  iou: 1.0
+  min_size: 10              # px; smaller nuclei are not prompted
+  val_clicks: 10            # validation: a box, a centre click and 9 corrective clicks
+  lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_epochs: 0.5
+
+trainer:
+  max_epochs: 10
+  precision: bf16-mixed
+
+checkpoint:
+  monitor: val/noc90       # mean clicks to 90% IoU
+  mode: min
+
+augmentation:               # flips, 90 degree rotations, H&E RandAugment
+  n: 2
+  m: 5
+
+loader:
+  batch_size: 2             # tiles per step (x objects nuclei); 4 nears 32 GB
+  num_workers: 8
+val_loader:
+  batch_size: 8
+
+data:
+  train:
+    images: /path/to/pannuke_split/train/images
+    instances: /path/to/pannuke_split/train/inst_masks
+    types: /path/to/pannuke_split/train/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
+  val:
+    images: /path/to/pannuke_split/val/images
+    instances: /path/to/pannuke_split/val/inst_masks
+    types: /path/to/pannuke_split/val/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true

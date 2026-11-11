@@ -1,31 +1,34 @@
-"""Interactive segmentation baselines for SAM 3, scored on instance-labelled tiles::
+"""Interactive segmentation of SAM 3, scored on instance-labelled tiles::
 
     python -m pathotrain.pathosam.eval zeroshot.yaml --split val --out val.json
     python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker
+    python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker \
+        --checkpoint runs/interactive/checkpoints/best.ckpt   # a fine-tuned model
 
 Start from ``configs/zeroshot.example.yaml`` beside this module. Two evaluations, both
 with prompts simulated from the ground truth (``data[split]``, an
 ``InstanceTileFolderDataset``); SAM 3 (``facebook/sam3``) is gated, SAM License:
 
-- ``tracker``, SAM 3's point and box model (``Sam3TrackerModel``), one object per prompt.
+- ``tracker``, SAM 3's point and box model (``Sam3TrackerModel``), one object per prompt:
+  zero-shot, or fine-tuned by :mod:`pathotrain.pathosam.train` with ``--checkpoint``.
   For every nucleus of at least ``min_size`` px:
 
-  - a box, for each jitter in ``box_jitter``: IoU (``iou_box@<jitter>``);
+  - a box, for each jitter in ``box_jitter``: IoU (``iou_box_<jitter>``);
   - a click at its centre, then ``max_clicks - 1`` corrective clicks (see
     :mod:`pathotrain.pathosam.prompts`), each round also given the previous mask:
-    mean IoU after ``k`` clicks (``iou@<k>``), and ``noc@85`` / ``noc@90``, the mean
-    number of clicks to reach that IoU (``max_clicks`` when never), with ``fail@85`` /
-    ``fail@90``, the share that never does.
+    mean IoU after ``k`` clicks (``iou_click<k>``), and ``noc85`` / ``noc90``, the mean
+    number of clicks to reach that IoU (``max_clicks`` when never), with ``fail85`` /
+    ``fail90``, the share that never does.
 
-- ``exemplar``, SAM 3's concept model (``Sam3Model``) given one example box per nucleus
-  type present in the tile, from one of that type's nuclei: every detection takes the
-  type, overlaps go to the higher score, and the result is scored like
+- ``exemplar``, SAM 3's concept model (``Sam3Model``, zero-shot) given one example box per
+  nucleus type present in the tile, from one of that type's nuclei: every detection takes
+  the type, overlaps go to the higher score, and the result is scored like
   ``pathotrain.cellseg.eval`` (``bpq``, ``mpq``, ``pq_<type>``, ``dq``, ``sq``) at every
   threshold in ``thresholds``. The example nucleus is itself counted, as an annotator's box
   would be.
 
 The tile is encoded once and reused for every prompt. Metrics print as JSON keyed
-``<split>/<evaluation>/<metric>``.
+``<split>/<evaluation>/<metric>``. Fine-tuning validates with the same ``tracker`` code.
 """
 
 import argparse
@@ -34,79 +37,70 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from PIL import Image
+from torch import Tensor
+from torchmetrics import Metric
 
 from pathotrain.cellseg.instances import instance_types
 from pathotrain.cellseg.prompted import paint
 from pathotrain.cellseg.task import PanopticQuality
 from pathotrain.dataloader import InstanceTileFolderDataset
+from pathotrain.dataloader.augmentation import eval_transform
 from pathotrain.engine import load_config
 from pathotrain.pathofm.sam3 import SAM3_REPO, SAM3_REVISION
+from pathotrain.pathosam.model import PAD, InteractiveSam, to_tile
 from pathotrain.pathosam.prompts import box, center_click, corrective_click
 
-PAD = -10  # the label of a padding point, which SAM's prompt encoder ignores
+SAM_MEAN = SAM_STD = (0.5, 0.5, 0.5)  # SAM 3's processor normalisation
 
 
 class Tracker:
-    """``Sam3TrackerModel``: masks at tile size for a batch of objects in one tile."""
+    """Masks at tile size for the objects of one tile, from an :class:`InteractiveSam`."""
 
-    def __init__(self, device: str, revision: str = SAM3_REVISION) -> None:
-        from transformers import Sam3TrackerModel, Sam3TrackerProcessor
+    def __init__(self, model: InteractiveSam) -> None:
+        self.model = model
 
-        self.device = device
-        self.processor = Sam3TrackerProcessor.from_pretrained(SAM3_REPO, revision=revision)
-        self.model = Sam3TrackerModel.from_pretrained(SAM3_REPO, revision=revision)
-        self.model.to(device).eval()
-        self.side = self.processor.image_processor.size["height"]  # 1008
+    @property
+    def device(self) -> torch.device:
+        return next(self.model.parameters()).device
 
-    @torch.no_grad()
-    def encode(self, image: Image.Image) -> list[torch.Tensor]:
-        pixels = self.processor(images=image, return_tensors="pt")["pixel_values"]
-        return self.model.get_image_embeddings(pixels.to(self.device))
+    def encode(self, image: Tensor) -> list[Tensor]:
+        """Embeddings of one normalised tile ``(3, H, W)``."""
+        return self.model(images=image[None].to(self.device))
 
     @torch.no_grad()
     def predict(
         self,
-        embeddings: list[torch.Tensor],
+        embeddings: list[Tensor],
         size: tuple[int, int],
         points: np.ndarray | None = None,
         labels: np.ndarray | None = None,
         boxes: np.ndarray | None = None,
-        masks: torch.Tensor | None = None,
+        masks: Tensor | None = None,
         multimask: bool = False,
-    ) -> tuple[np.ndarray, torch.Tensor]:
+    ) -> tuple[np.ndarray, Tensor]:
         """Masks ``(N, H, W)`` bool for N objects and their low-resolution logits
         ``(N, 1, h, w)``, to feed back as ``masks``. ``points`` ``(N, K, 2)`` and ``boxes``
         ``(N, 4)`` are in tile pixels. With ``multimask``, the mask SAM scores best."""
         n = len(points if points is not None else boxes)
-        scale = torch.tensor([self.side / size[1], self.side / size[0]], device=self.device)
-        kwargs = {}
-        if points is not None:
-            pts = torch.as_tensor(points, dtype=torch.float32, device=self.device) * scale
-            kwargs["input_points"] = pts[:, None]
-            kwargs["input_labels"] = torch.as_tensor(labels, device=self.device)[:, None]
-        if boxes is not None:
-            b = torch.as_tensor(boxes, dtype=torch.float32, device=self.device) * scale.repeat(2)
-            kwargs["input_boxes"] = b[:, None]
-        out = self.model(
-            image_embeddings=[e.expand(n, *e.shape[1:]) for e in embeddings],
-            input_masks=masks,
-            multimask_output=multimask,
-            **kwargs,
+        as_tensor = lambda a, dtype: (
+            None if a is None else torch.as_tensor(a, dtype=dtype, device=self.device)
         )
-        logits = out.pred_masks[:, 0]  # (N, masks, h, w)
+        logits, scores = self.model(
+            embeddings=[e.expand(n, *e.shape[1:]) for e in embeddings],
+            size=size,
+            points=as_tensor(points, torch.float32),
+            labels=as_tensor(labels, torch.long),
+            boxes=as_tensor(boxes, torch.float32),
+            masks=masks,
+            multimask=multimask,
+        )
         best = (
-            out.iou_scores[:, 0].argmax(-1)
-            if multimask
-            else torch.zeros_like(logits[:, 0, 0, 0]).long()
+            scores.argmax(-1) if multimask else torch.zeros(n, dtype=torch.long, device=self.device)
         )
         logits = logits[torch.arange(n), best][:, None]
-        # As the processor: up to the model's input size, then down to the tile's.
-        full = F.interpolate(logits.float(), (self.side, self.side), mode="bilinear")
-        full = F.interpolate(full, size, mode="bilinear")[:, 0] > 0
-        return full.cpu().numpy(), logits
+        return (to_tile(logits, size)[:, 0] > 0).cpu().numpy(), logits
 
 
 def _iou(true: np.ndarray, pred: np.ndarray) -> np.ndarray:
@@ -117,14 +111,14 @@ def _iou(true: np.ndarray, pred: np.ndarray) -> np.ndarray:
 
 def track_tile(
     tracker: Tracker,
-    image: Image.Image,
+    image: Tensor,
     true: np.ndarray,
     max_clicks: int,
     jitters: list[float],
     rng: np.random.Generator,
 ) -> tuple[dict[float, np.ndarray], np.ndarray]:
-    """For the ``(N, H, W)`` masks ``true`` of one tile: IoU per box jitter ``{jitter:
-    (N,)}`` and the IoU after each click ``(N, max_clicks)``."""
+    """For the ``(N, H, W)`` masks ``true`` of one normalised tile ``image``: IoU per box
+    jitter ``{jitter: (N,)}`` and the IoU after each click ``(N, max_clicks)``."""
     size = true.shape[1:]
     emb = tracker.encode(image)
     box_iou = {}
@@ -145,19 +139,49 @@ def track_tile(
     return box_iou, np.stack(curve, 1)
 
 
-def tracker_metrics(box_iou: dict[float, np.ndarray], curves: np.ndarray) -> dict[str, float]:
-    """Means over objects: ``iou_box@<jitter>``, ``iou@<k>`` after k clicks, and for 85 and
-    90% IoU the clicks needed (``noc@``, the maximum when never) and the share never
-    reaching it (``fail@``)."""
-    out = {f"iou_box@{j}": float(v.mean()) for j, v in box_iou.items()}
-    out |= {f"iou@{k + 1}": float(v) for k, v in enumerate(curves.mean(0))}
-    for t in (85, 90):
-        reached = curves >= t / 100
-        clicks = np.where(reached.any(1), reached.argmax(1) + 1, curves.shape[1])
-        out[f"noc@{t}"] = float(clicks.mean())
-        out[f"fail@{t}"] = float(1 - reached.any(1).mean())
-    out["objects"] = len(curves)
-    return out
+class ClickMetrics(Metric):
+    """Interactive metrics summed over objects (and ranks): ``iou_box_<jitter>``,
+    ``iou_click<k>`` after k clicks, and for 85 and 90% IoU the clicks needed (``noc``, the
+    maximum when never) and the share never reaching it (``fail``)."""
+
+    full_state_update = False
+
+    def __init__(self, jitters: list[float], max_clicks: int) -> None:
+        super().__init__()
+        self.jitters, self.max_clicks = list(jitters), max_clicks
+        add = lambda name, n: self.add_state(name, torch.zeros(n, dtype=torch.float64), "sum")
+        add("box", len(self.jitters))
+        add("iou", max_clicks)
+        add("noc", 2)
+        add("fail", 2)
+        add("objects", 1)
+
+    def update(self, box_iou: dict[float, np.ndarray], curves: np.ndarray) -> None:
+        as_t = lambda a: torch.as_tensor(np.asarray(a), dtype=torch.float64, device=self.box.device)
+        self.box += as_t([box_iou[j].sum() for j in self.jitters])
+        self.iou += as_t(curves.sum(0))
+        for i, t in enumerate((0.85, 0.90)):
+            reached = curves >= t
+            clicks = np.where(reached.any(1), reached.argmax(1) + 1, self.max_clicks)
+            self.noc[i] += float(clicks.sum())
+            self.fail[i] += float((~reached.any(1)).sum())
+        self.objects += len(curves)
+
+    def compute(self) -> dict[str, float]:
+        n = self.objects.clamp_min(1)
+        out = {f"iou_box_{j}": (v / n).item() for j, v in zip(self.jitters, self.box, strict=True)}
+        out |= {f"iou_click{k + 1}": (v / n).item() for k, v in enumerate(self.iou)}
+        for i, t in enumerate((85, 90)):
+            out[f"noc{t}"] = (self.noc[i] / n).item()
+            out[f"fail{t}"] = (self.fail[i] / n).item()
+        out["objects"] = self.objects.item()
+        return out
+
+
+def nuclei(inst: np.ndarray, min_size: int) -> list[int]:
+    """The instance ids of ``inst`` with at least ``min_size`` pixels."""
+    sizes = np.bincount(inst.ravel())
+    return [int(k) for k in np.nonzero(sizes >= min_size)[0] if k > 0]
 
 
 class Exemplar:
@@ -203,10 +227,14 @@ class Exemplar:
         return out
 
 
-def evaluate(cfg: dict, split: str, only: str | None = None) -> dict[str, float]:
-    """Run the evaluations of ``cfg`` (``only`` one of them) on ``data[split]``."""
+def evaluate(
+    cfg: dict, split: str, only: str | None = None, checkpoint: str | Path | None = None
+) -> dict[str, float]:
+    """Run the evaluations of ``cfg`` (``only`` one of them) on ``data[split]``; the tracker
+    is the fine-tuned model of ``checkpoint`` when given, else zero-shot SAM 3."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dataset = InstanceTileFolderDataset(**cfg["data"][split])
+    transform = eval_transform(mean=SAM_MEAN, std=SAM_STD)
+    dataset = InstanceTileFolderDataset(transform=transform, **cfg["data"][split])
     limit = min(len(dataset), cfg.get("limit") or len(dataset))
     rng = np.random.default_rng(cfg.get("seed", 0))
     min_size = cfg.get("min_size", 10)
@@ -214,9 +242,15 @@ def evaluate(cfg: dict, split: str, only: str | None = None) -> dict[str, float]
     run_exemplar = only in (None, "exemplar")
     if run_tracker:
         t_cfg = cfg.get("tracker", {})
-        tracker = Tracker(device)
+        if checkpoint is not None:
+            from pathotrain.pathosam.train import load_model
+
+            model = load_model(checkpoint)[0]
+        else:
+            model = InteractiveSam()
+        tracker = Tracker(model.to(device).eval())
         jitters = t_cfg.get("box_jitter", [0.0, 0.05, 0.1])
-        boxes_all, curves_all = {j: [] for j in jitters}, []
+        clicks = ClickMetrics(jitters, t_cfg.get("max_clicks", 20))
     if run_exemplar:
         e_cfg = cfg.get("exemplar", {})
         exemplar = Exemplar(device)
@@ -224,25 +258,18 @@ def evaluate(cfg: dict, split: str, only: str | None = None) -> dict[str, float]
         num_classes = cfg["num_classes"]
         pq = {t: PanopticQuality(num_classes) for t in thresholds}
     for i in range(limit):
-        image = Image.open(dataset.samples[i][0]).convert("RGB")
-        target = dataset[i][1]
+        image, target = dataset[i]
         inst, types = target["inst"].numpy(), target["type"].numpy()
-        ids = [k for k in np.unique(inst) if k > 0 and (inst == k).sum() >= min_size]
+        ids = nuclei(inst, min_size)
         if run_tracker and ids:
             true = np.stack([inst == k for k in ids])
-            box_iou, curves = track_tile(
-                tracker, image, true, t_cfg.get("max_clicks", 20), jitters, rng
-            )
-            for j in jitters:
-                boxes_all[j].append(box_iou[j])
-            curves_all.append(curves)
+            clicks.update(*track_tile(tracker, image, true, clicks.max_clicks, jitters, rng))
         if run_exemplar:
             kinds = instance_types(inst, types, num_classes)
             present = sorted({int(kinds[k]) for k in ids} - {0})
             examples = [box(inst == rng.choice([k for k in ids if kinds[k] == c])) for c in present]
-            found = exemplar.detect(
-                image, examples, thresholds[0], e_cfg.get("mask_threshold", 0.5)
-            )
+            pil = Image.open(dataset.samples[i][0]).convert("RGB")
+            found = exemplar.detect(pil, examples, thresholds[0], e_cfg.get("mask_threshold", 0.5))
             for t in thresholds:
                 kept = [
                     (s, m, c)
@@ -256,9 +283,7 @@ def evaluate(cfg: dict, split: str, only: str | None = None) -> dict[str, float]
             logger.info("{}: {}/{} tiles", split, i + 1, limit)
     metrics = {}
     if run_tracker:
-        boxes = {j: np.concatenate(v) for j, v in boxes_all.items()}
-        result = tracker_metrics(boxes, np.concatenate(curves_all))
-        metrics |= {f"{split}/tracker/{k}": v for k, v in result.items()}
+        metrics |= {f"{split}/tracker/{k}": v for k, v in clicks.compute().items()}
     if run_exemplar:
         names = cfg.get("class_names") or [str(c) for c in range(num_classes)]
         for t in thresholds:
@@ -276,9 +301,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("config", help="zeroshot.yaml")
     parser.add_argument("--split", default="val", help="data split to score (default: val)")
     parser.add_argument("--only", choices=["tracker", "exemplar"], help="run one evaluation")
+    parser.add_argument("--checkpoint", help="score this fine-tuned tracker (pathosam.train)")
     parser.add_argument("--out", help="also write the metrics to this JSON file")
     args = parser.parse_args(argv)
-    metrics = evaluate(load_config(args.config), args.split, args.only)
+    metrics = evaluate(load_config(args.config), args.split, args.only, args.checkpoint)
     print(json.dumps(metrics, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(metrics, indent=2) + "\n")
