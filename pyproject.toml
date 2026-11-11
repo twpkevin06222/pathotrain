@@ -16,7 +16,7 @@ dependencies = [
     "numpy>=2.4.6",
     "nvidia-ml-py>=13.615.71",
     "optuna>=5.0.0",
-    "patchology",
+    "patchology>=0.1.0",
     "pillow>=10.0",
     "pyyaml>=6.0",
     "scikit-image>=0.26.0",
