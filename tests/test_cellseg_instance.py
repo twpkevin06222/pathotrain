@@ -4,7 +4,14 @@ import torch
 from PIL import Image
 from transformers import Dinov2Config, Dinov2Model
 
-from pathotrain.cellseg import CellDataset, CellInstanceTask, PanopticQuality, build_model, classify
+from pathotrain.cellseg import (
+    CellDataset,
+    CellInstanceTask,
+    PanopticQuality,
+    build_model,
+    classify,
+    prompted,
+)
 from pathotrain.cellseg.classify import cell_tokens, classify_cells
 from pathotrain.cellseg.instances import (
     hv_maps,
@@ -279,3 +286,55 @@ def test_example_configs_are_valid():
 
     semantic = load_config(configs / "config.example.yaml")
     assert semantic["model"]["name"].startswith("cellseg:")
+
+    prompted_cfg = load_config(configs / "prompted.example.yaml")
+    assert len(prompted_cfg["prompts"]) == prompted_cfg["num_classes"] - 1
+    for split in ("val", "test"):
+        assert set(prompted_cfg["data"][split]) <= dataset_args
+
+
+def test_paint_gives_overlaps_to_the_higher_score_and_drops_small_leftovers():
+    a = np.zeros((32, 32), bool)
+    a[0:10, 0:10] = True
+    b = np.zeros((32, 32), bool)
+    b[5:15, 5:15] = True
+    c = np.zeros((32, 32), bool)
+    c[6:9, 6:9] = True  # 9 px: under min_size even before any overlap
+    inst, types = prompted.paint([(0.5, a, 1), (0.9, b, 2), (0.95, c, 3)], (32, 32), 10)
+    assert types.tolist() == [0, 2, 1]  # c dropped; b, then a
+    assert inst[7, 7] == 1  # the overlap goes to b, the higher score
+    assert (inst == 1).sum() == 100 and (inst == 2).sum() == 75
+
+
+class _OraclePrompter:
+    """Detects exactly the true nuclei of each type (score 0.9), as a perfect SAM 3 would."""
+
+    def __init__(self, dataset, by_prompt):
+        self.dataset, self.by_prompt = dataset, by_prompt
+
+    def detect(self, images, prompts, threshold, mask_threshold):
+        target = self.dataset[0][1]
+        inst, types = target["inst"].numpy(), target["type"].numpy()
+        kinds = instance_types(inst, types, 3)
+        out = {}
+        for p in prompts:
+            ids = [i for i in range(1, inst.max() + 1) if kinds[i] in self.by_prompt[p]]
+            out[p] = [(0.9, inst == i) for i in ids]
+        return [out for _ in images]
+
+
+def test_prompted_evaluation_scores_perfect_detections_as_pq_one(tmp_path):
+    data = _write_pannuke_tile(tmp_path)
+    cfg = {"prompts": {1: "a cell", 2: "b cell"}, "num_classes": 3, "thresholds": [0.5, 0.95]}
+    cfg["data"] = {"val": data}
+    prompter = _OraclePrompter(CellDataset(**data), {"a cell": {1}, "b cell": {2}})
+    metrics = prompted.evaluate(cfg, "val", prompter)
+    assert metrics["val/bpq@0.5"] == 1 and metrics["val/mpq@0.5"] == 1
+    assert metrics["val/pq_1@0.5"] == 1 and metrics["val/nuclei_per_tile@0.5"] == 3
+    assert metrics["val/nuclei_per_tile@0.95"] == 0  # all below the threshold
+    binary = prompted.evaluate(
+        {**cfg, "prompts": "a cell"},
+        "val",
+        _OraclePrompter(CellDataset(**data), {"a cell": {1, 2}}),
+    )
+    assert binary["val/bpq@0.5"] == 1 and "val/mpq@0.5" not in binary
