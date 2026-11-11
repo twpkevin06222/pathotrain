@@ -210,6 +210,32 @@ def test_exemplar_sends_each_box_with_its_types_text(monkeypatch, tmp_path):
     assert metrics["val/exemplar_text/bpq@0.5"] == 1 and metrics["val/exemplar_text/mpq@0.5"] == 1
 
 
+def test_onnx_export_runs_a_click_session_like_pytorch(monkeypatch, tmp_path):
+    pytest.importorskip("onnxruntime")
+    import json
+
+    from pathotrain.pathosam.eval import Tracker, track_tile
+    from pathotrain.pathosam.export import OnnxTracker, export
+
+    model = _tiny_sam(monkeypatch)
+    monkeypatch.setattr("pathotrain.pathosam.export.InteractiveSam", lambda: model)
+    out = export(tmp_path / "onnx", size=64)
+    meta = json.loads((out / "pathosam.json").read_text())
+    assert meta["tile_size"] == 64 and meta["labels"]["box"] == [2, 3]
+    assert {p.name for p in out.iterdir()} >= {"encoder.onnx", "decoder.onnx", "pathosam.json"}
+
+    image, target = _batch()
+    true = np.stack([target["inst"][0].numpy() == k for k in (1, 2)])
+    runs = []
+    for tracker in (Tracker(model.eval()), OnnxTracker(out, ["CPUExecutionProvider"])):
+        rng = np.random.default_rng(0)  # same box jitter for both
+        runs.append(track_tile(tracker, image[0], true, 4, [0.0, 0.1], rng))
+    (box_t, curve_t), (box_o, curve_o) = runs
+    for j in (0.0, 0.1):
+        np.testing.assert_allclose(box_o[j], box_t[j], atol=0.02)
+    np.testing.assert_allclose(curve_o, curve_t, atol=0.02)  # IoU after each click
+
+
 def test_example_config_is_valid():
     import inspect
     from importlib.resources import files

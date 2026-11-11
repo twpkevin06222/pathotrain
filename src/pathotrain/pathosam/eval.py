@@ -4,6 +4,7 @@
     python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker
     python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker \
         --checkpoint runs/interactive/checkpoints/best.ckpt   # a fine-tuned model
+    python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker --onnx out/
 
 Start from ``configs/zeroshot.example.yaml`` beside this module. Two evaluations, both
 with prompts simulated from the ground truth (``data[split]``, an
@@ -238,10 +239,15 @@ class Exemplar:
 
 
 def evaluate(
-    cfg: dict, split: str, only: str | None = None, checkpoint: str | Path | None = None
+    cfg: dict,
+    split: str,
+    only: str | None = None,
+    checkpoint: str | Path | None = None,
+    onnx: str | Path | None = None,
 ) -> dict[str, float]:
-    """Run the evaluations of ``cfg`` (``only`` one of them) on ``data[split]``; the tracker
-    is the fine-tuned model of ``checkpoint`` when given, else zero-shot SAM 3."""
+    """Run the evaluations of ``cfg`` (``only`` one of them) on ``data[split]``. The tracker
+    is the fine-tuned model of ``checkpoint``, or the ONNX export in folder ``onnx``
+    (:mod:`pathotrain.pathosam.export`), else zero-shot SAM 3."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     transform = eval_transform(mean=SAM_MEAN, std=SAM_STD)
     dataset = InstanceTileFolderDataset(transform=transform, **cfg["data"][split])
@@ -252,13 +258,16 @@ def evaluate(
     run_exemplar = only in (None, "exemplar")
     if run_tracker:
         t_cfg = cfg.get("tracker", {})
-        if checkpoint is not None:
+        if onnx is not None:
+            from pathotrain.pathosam.export import OnnxTracker
+
+            tracker = OnnxTracker(onnx)
+        elif checkpoint is not None:
             from pathotrain.pathosam.train import load_model
 
-            model = load_model(checkpoint)[0]
+            tracker = Tracker(load_model(checkpoint)[0].to(device).eval())
         else:
-            model = InteractiveSam()
-        tracker = Tracker(model.to(device).eval())
+            tracker = Tracker(InteractiveSam().to(device).eval())
         jitters = t_cfg.get("box_jitter", [0.0, 0.05, 0.1])
         clicks = ClickMetrics(jitters, t_cfg.get("max_clicks", 20))
     if run_exemplar:
@@ -320,9 +329,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--split", default="val", help="data split to score (default: val)")
     parser.add_argument("--only", choices=["tracker", "exemplar"], help="run one evaluation")
     parser.add_argument("--checkpoint", help="score this fine-tuned tracker (pathosam.train)")
+    parser.add_argument("--onnx", help="score this exported tracker folder (pathosam.export)")
     parser.add_argument("--out", help="also write the metrics to this JSON file")
     args = parser.parse_args(argv)
-    metrics = evaluate(load_config(args.config), args.split, args.only, args.checkpoint)
+    metrics = evaluate(load_config(args.config), args.split, args.only, args.checkpoint, args.onnx)
     print(json.dumps(metrics, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(metrics, indent=2) + "\n")

@@ -87,6 +87,39 @@ its 32 GB.
 Anything distributed that is built on SAM 3, such as a fine-tuned checkpoint, falls under
 the SAM License. A model trained on PanNuke is also non-commercial.
 
+## ONNX export
+
+```bash
+python -m pathotrain.pathosam.export out/ --checkpoint runs/pathosam-interactive/checkpoints/best.ckpt
+python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker --onnx out/
+```
+
+Without `--checkpoint`, the export is zero-shot SAM 3. As with SAM's own ONNX export, the
+model is split in two:
+
+- **`encoder.onnx` (1.9 GB):** runs once per tile. It takes the normalised tile
+  (mean = std = 0.5) at `--size` px and returns three feature maps, `fpn0`, `fpn1` and
+  `fpn2`.
+- **`decoder.onnx` (17 MB):** runs once per click, for N objects (`objects` and `points`
+  are dynamic axes).
+  - Inputs: the feature maps, `points` in tile pixels, and `labels` (1 positive, 0
+    negative, 2 and 3 a box's corners after the clicks, -10 padding). Also `mask_input`,
+    the previous `low_res` logits, with `has_mask`.
+  - Outputs: the single mask (`low_res`, `iou`) for every round after the first, and three
+    candidates (`multi_low_res`, `multi_iou`) for an ambiguous first click.
+  - Mask logits are 288 x 288. Resize them to 1008, then to the tile, and threshold at 0
+    (`pathosam.model.to_tile`).
+
+`pathosam.json` beside the graphs (also stored in each) records the tile size,
+normalisation, input and output names, label codes and licence. Export checks both graphs
+against PyTorch. `pathosam.export.OnnxTracker` runs them behind the same interface as the
+PyTorch model, so `pathosam.eval --onnx` scores an export with the same click protocol.
+
+On 756 PanNuke val nuclei, the fine-tuned export matched PyTorch within 0.001 IoU at every
+click (ONNX Runtime with CUDA). The encoder's float32 drift is larger on random input than
+on real tiles, so its check tolerance is 1e-2. The files are SAM 3's weights, under the
+SAM License.
+
 ## Notes
 
 - SAM 3's point/box model reads the same image-encoder ViT, with identical weights, as
