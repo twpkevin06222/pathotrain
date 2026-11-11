@@ -1,0 +1,42 @@
+# Zero-shot interactive segmentation baselines for SAM 3, prompts simulated from the
+# ground truth:
+#   python -m pathotrain.pathosam.eval zeroshot.yaml --split val --out val.json
+#   python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker
+# Needs access to the gated facebook/sam3 (SAM License). Copy this file and set the paths.
+
+name: pathosam-zeroshot
+seed: 0                     # box jitter and the choice of example nuclei
+limit: null                 # score only the first N tiles (e.g. 20 for a smoke run)
+min_size: 10                # px; smaller nuclei are not prompted
+
+# Sam3TrackerModel: one nucleus per prompt.
+tracker:
+  max_clicks: 20            # a centre click, then corrective clicks
+  box_jitter: [0.0, 0.05, 0.1]  # each box side moved by up to this share of its size
+
+# Sam3Model: one example box per nucleus type present in the tile finds the rest.
+exemplar:
+  thresholds: [0.4, 0.5, 0.6, 0.7, 0.8]  # detection scores, all scored in one pass
+  mask_threshold: 0.5
+
+num_classes: 6              # types plus background, for the exemplar's PQ
+# Label order of the pannuke_split conversion (neoplastic is label 5).
+class_names: [background, inflammatory, connective, necrosis, epithelial, neoplastic]
+
+data:
+  val:
+    images: /path/to/pannuke_split/val/images
+    instances: /path/to/pannuke_split/val/inst_masks
+    types: /path/to/pannuke_split/val/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
+  test:
+    images: /path/to/pannuke_split/test/images
+    instances: /path/to/pannuke_split/test/inst_masks
+    types: /path/to/pannuke_split/test/sem_masks
+    image_prefix: img_
+    instance_prefix: inst_
+    type_prefix: sem_
+    contours: true
