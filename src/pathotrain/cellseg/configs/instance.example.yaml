@@ -20,7 +20,9 @@ model:
 task:
   lr: 1.0e-3
   warmup_epochs: 1
-  # class_names: [background, ...]  # in your masks' label order; keys val/pq_<name>
+  # Label order of the pannuke_split conversion: PanNuke's neoplastic channel (0) is label 5,
+  # the other types keep their channel number. Other conversions may differ; check counts.
+  class_names: [background, inflammatory, connective, necrosis, epithelial, neoplastic]  # val/pq_<name>
   # loss_weights: {np: 1.0, hv_mse: 1.0, hv_msge: 1.0, nt: 1.0}  # HoVer-Net's
   # postprocess: {threshold: 0.5, marker_threshold: 0.4, min_size: 10}
 

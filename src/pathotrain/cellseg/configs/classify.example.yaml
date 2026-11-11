@@ -20,7 +20,8 @@ match_radius: 15            # px between a detection's and a ground-truth cell's
 
 task:
   lr: 1.0e-3
-  # class_names: [...]      # the nucleus types, in label order 1..5
+  class_names: [inflammatory, connective, necrosis, epithelial, neoplastic]  # labels 1..5 of
+  # the pannuke_split conversion (neoplastic is label 5); other conversions may differ
 
 trainer:
   max_epochs: 50
