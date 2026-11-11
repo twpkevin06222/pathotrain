@@ -54,6 +54,15 @@ class _CachedRope(nn.Module):
         return self.cos, self.sin
 
 
+def cache_rope(vit: Sam3ViTModel) -> Sam3ViTModel:
+    """Replace each layer's RoPE module of ``vit`` (in place) with tables computed once for
+    its current grid, so the ViT traces to ONNX; returns ``vit``."""
+    for layer in vit.layers:
+        if not isinstance(layer.rotary_emb, _CachedRope):
+            layer.rotary_emb = _CachedRope(layer.rotary_emb, layer.position_ids)
+    return vit
+
+
 class Sam3Backbone(nn.Module):
     """A ``Sam3ViTModel`` with the interface pathotrain's ViT encoders take: ``config``
     (``patch_size``, ``hidden_size``, ``num_hidden_layers``) and ``forward(pixel_values,
@@ -62,10 +71,8 @@ class Sam3Backbone(nn.Module):
 
     def __init__(self, vit: Sam3ViTModel) -> None:
         super().__init__()
-        self.vit = vit
+        self.vit = cache_rope(vit)
         self.config = vit.config
-        for layer in vit.layers:
-            layer.rotary_emb = _CachedRope(layer.rotary_emb, layer.position_ids)
         grid = vit.config.image_size // vit.config.patch_size
         self._grid = (grid, grid)
 
