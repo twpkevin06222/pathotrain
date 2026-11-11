@@ -1,7 +1,7 @@
 # pathotrain
 
 <p align="center">
-  <img src="figures/pathotrain_banner.png" alt="pathotrain: pathology model training on whole-slide tiles" width="100%">
+  <img src="https://raw.githubusercontent.com/twpkevin06222/pathotrain/main/figures/pathotrain_banner.png" alt="pathotrain: pathology model training on whole-slide tiles" width="100%">
 </p>
 
 > [!WARNING]
@@ -30,8 +30,8 @@ python -m venv .venv && source .venv/bin/activate
 # 1. PyTorch built for CUDA 13.0 (the PyPI default build may not match your GPU driver)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
-# 2. patchology (tiling), also not on PyPI
-pip install "patchology @ git+https://github.com/twpkevin06222/patchology"
+# 2. patchology (tiling), from PyPI; it brings OpenSlide's binaries with it
+pip install patchology
 # or, from a local checkout: pip install -e ../patchology
 
 # 3. pathotrain
@@ -40,14 +40,14 @@ cd pathotrain
 pip install -e .
 ```
 
-The core install covers `segmentation`, `pathofm`, `dataloader`, `engine`,
-`registration` and `experiment`. The other modules need an extra. The full
-list of extras:
+The core install covers `segmentation`, `cellseg`, `pathosam`, `pathofm`,
+`dataloader`, `engine`, `registration` and `experiment`. The other modules need an
+extra. The full list of extras:
 
 | Extra | Installs | Needed for |
 |---|---|---|
 | `detection` | rfdetr 1.11.2 (pinned), pycocotools, torch-hungarian | `pathotrain.detection` |
-| `histossl` | peft | LoRA adaptation in `pathotrain.histossl` and `pathotrain.pathoclip` |
+| `histossl` | peft | LoRA adaptation in `pathotrain.histossl`, `pathotrain.pathoclip`, and the ViT encoders of `segmentation` and `cellseg` |
 | `pathogen` | diffusers | `pathotrain.pathogen` |
 | `pathovlm` | trl (pinned), peft, num2words | `pathotrain.pathovlm` |
 | `export` | onnx, onnxruntime | ONNX export of any trained model |
@@ -60,14 +60,16 @@ pip install -e ".[all]"                # everything
 ```
 
 Foundation-model weights (about 4.5 GB each) download from Hugging Face into
-`~/.cache/huggingface` on first use; set `HF_HOME` to put them elsewhere. None
-of them is gated, so no login is needed.
+`~/.cache/huggingface` on first use; set `HF_HOME` to put them elsewhere. The
+pathology foundation models are not gated. SAM 3 (`facebook/sam3`, 3.4 GB), used by
+`pathosam` and as an optional `segmentation` / `cellseg` backbone, is gated: request
+access on its Hugging Face page and log in with `hf auth login`.
 
 ## Getting started
 
 ### System design
 
-![pathotrain system design: slides and annotations are tiled by patchology, loaded and augmented by pathotrain.dataloader, trained by the task modules on the shared engine, and exported as checkpoints, ONNX or safetensors for inference](figures/pathotrain_systemdesign.png)
+![pathotrain system design: slides and annotations are tiled by patchology, loaded and augmented by pathotrain.dataloader, trained by the task modules on the shared engine, and exported as checkpoints, ONNX or safetensors for inference](https://raw.githubusercontent.com/twpkevin06222/pathotrain/main/figures/pathotrain_systemdesign.png)
 
 Slides and their annotations are tiled by patchology, loaded and augmented by
 `pathotrain.dataloader`, and trained by a task module on the shared engine.
@@ -140,13 +142,15 @@ These support the trainable modules and have no training of their own.
 |---|---|
 | [`dataloader`](src/pathotrain/dataloader/README.md) | PyTorch datasets for slides and tiles: segmentation (GeoJSON masks), detection, classification (class folders or CSV), unlabelled tiles with multi-crop views, paired tiles, VQA image-question-answer rows (with a PathVQA converter); tile export to disk; augmentation (HED / HSV stain jitter, flips, rotations, blur, JPEG, RandAugment) |
 | `engine` | The trainer all tasks share: `Task` contract, `Trainer` on Lightning Fabric (devices, DDP, mixed precision, gradient accumulation and clipping), `ModelCheckpoint` / `EarlyStopping` callbacks, MLflow and CSV loggers, warmup-cosine schedule, Optuna `sweep`, YAML config loading |
-| [`pathofm`](src/pathotrain/pathofm/README.md) | Pathology foundation models as frozen or trainable backbones, with their model-card preprocessing and tile / dense embeddings (see below) |
+| [`pathofm`](src/pathotrain/pathofm/README.md) | Pathology foundation models, and SAM 3's image encoder, as frozen or trainable backbones, with their model-card preprocessing and tile / dense embeddings (see below) |
 | [`registration`](src/pathotrain/registration/README.md) | Rigid alignment of a non-H&E slide (IHC, special stain) to its H&E slide, with an overlay check; feeds paired tiles to `pathogen` |
 | `experiment.py` | The plumbing behind every config-driven `train` / `eval` / `export` command: `start` (copy the config, start `train.log`, seed), `fit` (wire trainer, callbacks, loggers and data loaders from the config), `evaluate` / `log_eval`, `export_onnx` (ONNX graph with its preprocessing metadata) and `register_onnx` (MLflow model registry), and config `normalisation` presets |
 
 ### Foundation models in `pathofm`
 
-Only open models: MIT or Apache-2.0, not gated. Revisions are pinned, so the
+The pathology foundation models are open: MIT or Apache-2.0, not gated. SAM 3 is the
+exception: gated, under the SAM License (commercial use allowed, but anything you
+distribute that is built on it stays under that licence). Revisions are pinned, so the
 weights never change under a run.
 
 | Name | Weights | Architecture | Normalisation |
@@ -154,6 +158,12 @@ weights never change under a run.
 | `midnight-12k` | [kaiko-ai/midnight](https://huggingface.co/kaiko-ai/midnight) | DINOv2 ViT-g/14, 1.1B parameters | mean = std = 0.5 |
 | `spectra-midnight-12k` | [medarc/Midnight-12k-SPECTRA](https://huggingface.co/medarc/Midnight-12k-SPECTRA) | as midnight-12k, tuned for scanner, stain and centre robustness | mean = std = 0.5 |
 | `openmidnight-1.1` | [medarc/OpenMidnight-1.1](https://huggingface.co/medarc/OpenMidnight-1.1) | DINOv2 ViT-g/14 with 4 registers, converted from timm on load | ImageNet |
+| `sam3` | [facebook/sam3](https://huggingface.co/facebook/sam3) (gated) | SAM 3's image encoder, ViT-L/14, 446M parameters; any tile size (RoPE recomputed per grid) | mean = std = 0.5 |
+
+`sam3` has no CLS token, so it serves dense tasks only: a `segmentation` encoder
+(`encoder_name: sam3`) or a `cellseg:cellvit` backbone (`backbone: sam3`), frozen or
+fine-tuned with LoRA (`adaptation: {type: lora, rank: 8}`). `build_encoder` and the tile
+(classification) embedding take the three pathology models.
 
 ```python
 from pathotrain.pathofm import build_encoder
