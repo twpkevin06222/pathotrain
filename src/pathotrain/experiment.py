@@ -396,7 +396,7 @@ def model_card(
             "source_metadata": {"pathotrain": onnx_metadata(cfg, task, size, {})},
         },
     }
-    if task == "segmentation":
+    if task in ("segmentation", "instance"):
         card["background_id"] = 0
     elif task == "classification":
         card["background_id"] = None  # no class is "not a finding" by default
@@ -405,7 +405,7 @@ def model_card(
 
 def card_classes(cfg: dict, task: str) -> list[dict]:
     """``{id, name, color}`` per output index. Names come from ``task.class_names``, else
-    from ``data.class_map`` (inverted; label 0 is ``background`` for segmentation);
+    from ``data.class_map`` (inverted; label 0 is ``background`` for segmentation and instance);
     colours from the top-level ``class_colors`` (by name), else tab20.
 
     Raises:
@@ -415,7 +415,7 @@ def card_classes(cfg: dict, task: str) -> list[dict]:
     names = cfg.get("task", {}).get("class_names")
     if not names:
         by_label = {label: name for name, label in (cfg["data"].get("class_map") or {}).items()}
-        if task == "segmentation":
+        if task in ("segmentation", "instance"):
             by_label.setdefault(0, "background")
         missing = [i for i in range(n) if i not in by_label]
         if missing:

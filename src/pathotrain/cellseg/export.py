@@ -16,9 +16,9 @@ instance map and each instance's type. Tiles must overlap and their nuclei be me
 across tile borders when inferring a slide.
 
 Export writes ``model_card.json`` beside the ONNX file and embeds it, as
-``pathotrain.segmentation.export`` does. pathoinfer has no instance task, so the card is
-a **segmentation** card on ``nt``: pathoinfer runs the file as a per-pixel nucleus-type
-map. Classes need real names (``task.class_names``). Tile folders record no resolution,
+``pathotrain.segmentation.export`` does. It is an **instance** card naming the three
+outputs: pathoinfer runs the same watershed on each tile and writes typed nucleus
+polygons. Classes need real names (``task.class_names``). Tile folders record no resolution,
 so ``--mpp`` and ``--icc``/``--no-icc`` are required, and ``--size`` without a training crop.
 """
 
@@ -75,10 +75,11 @@ def export(
         "nt": "(batch, num_classes, size, size) float32 nucleus-type logits",
     }
     metadata = experiment.onnx_metadata(cfg, "instance_segmentation", size, outputs)
-    output = {"tensor": "nt", "activation": "logits", "n_classes": cfg["model"]["num_classes"]}
+    n_classes = cfg["model"]["num_classes"]
+    output = {"np": "np", "hv": "hv", "nt": "nt", "activation": "logits", "n_classes": n_classes}
     card = experiment.model_card(
         cfg,
-        "segmentation",
+        "instance",
         size,
         path.name,
         output,

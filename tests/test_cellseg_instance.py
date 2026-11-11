@@ -210,7 +210,7 @@ def test_embed_cells_labels_detections_with_the_paired_ground_truth(tmp_path, mo
     assert y.tolist() == [0, 1, 1]  # types 1, 2, 2 as classes
 
 
-def test_export_writes_three_branches_and_a_segmentation_card_on_nt(tmp_path):
+def test_export_writes_three_branches_and_an_instance_card(tmp_path):
     ort = pytest.importorskip("onnxruntime")
     import json
 
@@ -240,8 +240,14 @@ def test_export_writes_three_branches_and_a_segmentation_card_on_nt(tmp_path):
     path = export(tmp_path / "m.ckpt", tmp_path / "out" / "m.onnx", 64, mpp=0.25, icc=False)
 
     card = json.loads((path.parent / "model_card.json").read_text())
-    assert card["task"] == "segmentation" and card["background_id"] == 0
-    assert card["output"] == {"tensor": "nt", "activation": "logits", "n_classes": 3}
+    assert card["task"] == "instance" and card["background_id"] == 0
+    assert card["output"] == {
+        "np": "np",
+        "hv": "hv",
+        "nt": "nt",
+        "activation": "logits",
+        "n_classes": 3,
+    }
     assert [c["name"] for c in card["classes"]] == ["background", "tumour", "immune"]
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     assert [o.name for o in session.get_outputs()] == ["np", "hv", "nt"]
