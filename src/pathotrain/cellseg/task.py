@@ -82,7 +82,9 @@ class PanopticQuality(Metric):
 
 class CellInstanceTask(Task):
     """Nucleus instance segmentation and typing, HoVer-Net style, on the
-    ``(image, {"inst", "type", "hv"})`` batches of :class:`~pathotrain.cellseg.data.CellDataset`.
+    ``(image, {"inst", "type", "hv"})`` batches of
+    :class:`~pathotrain.dataloader.InstanceTileFolderDataset` with
+    :func:`~pathotrain.cellseg.instances.add_hv_maps` (as :mod:`pathotrain.cellseg.train` builds them).
 
     ``model`` returns the ``np``, ``hv`` and ``nt`` branches (a ``cellseg`` model with
     ``instance=True``). The loss is HoVer-Net's: cross-entropy + Dice on NP and NT, MSE

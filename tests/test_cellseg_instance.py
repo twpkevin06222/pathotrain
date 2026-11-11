@@ -5,7 +5,6 @@ from PIL import Image
 from transformers import Dinov2Config, Dinov2Model
 
 from pathotrain.cellseg import (
-    CellDataset,
     CellInstanceTask,
     PanopticQuality,
     build_model,
@@ -14,13 +13,14 @@ from pathotrain.cellseg import (
 )
 from pathotrain.cellseg.classify import cell_tokens, classify_cells
 from pathotrain.cellseg.instances import (
+    add_hv_maps,
     hv_maps,
     instance_types,
-    instances_from_contours,
     match,
     pair_centroids,
     postprocess,
 )
+from pathotrain.dataloader import InstanceTileFolderDataset
 from pathotrain.segmentation.encoders import token_grids
 
 TINY_VIT = Dinov2Config(
@@ -36,17 +36,6 @@ def _touching_nuclei() -> np.ndarray:
     inst[(yy - 20) ** 2 + (xx - 34) ** 2 < 81] = 2  # touches 1 along x = 26
     inst[(yy - 46) ** 2 + (xx - 40) ** 2 < 64] = 3
     return inst
-
-
-def test_contours_split_touching_nuclei():
-    inst = _touching_nuclei()
-    types = (inst > 0).astype(np.uint8) * 2
-    contours = np.zeros_like(inst)
-    contours[:, 26] = 1  # the outline between nuclei 1 and 2
-    derived = instances_from_contours(contours, types)
-    assert len(np.unique(derived)) == 4  # background and three nuclei
-    assert match(inst, derived)[0] == 3
-    assert (derived > 0).sum() == (inst > 0).sum()  # outline pixels are kept
 
 
 def test_hv_maps_point_away_from_each_centre():
@@ -134,12 +123,18 @@ def _write_pannuke_tile(root, name="a"):
     }
 
 
-def test_cell_dataset_pairs_prefixed_folders_and_builds_targets(tmp_path):
-    ds = CellDataset(**_write_pannuke_tile(tmp_path))
-    image, target = ds[0]
-    assert image.shape == (3, 64, 64)
-    assert len(target["inst"].unique()) == 4 and target["type"].max() == 2
-    assert target["hv"].shape == (2, 64, 64)
+def test_training_targets_get_hv_maps_of_the_augmented_instances(tmp_path):
+    from pathotrain.cellseg.train import build_dataset
+    from pathotrain.dataloader.augmentation import train_transform
+
+    data = _write_pannuke_tile(tmp_path)
+    ds = InstanceTileFolderDataset(
+        transform=train_transform(n=0), target_transform=add_hv_maps, **data
+    )
+    _, target = ds[0]
+    torch.testing.assert_close(target["hv"], torch.from_numpy(hv_maps(target["inst"].numpy())))
+    cfg = {"mean": [0.5] * 3, "std": [0.5] * 3, "data": {"train": data}}
+    assert "hv" in build_dataset(cfg, "train", train=True)[0][1]
 
 
 def test_instance_task_trains_and_scores_pq():
@@ -273,7 +268,7 @@ def test_example_configs_are_valid():
     CellInstanceTask(model, instance["model"]["num_classes"], **instance["task"])
     TrainerConfig(**instance["trainer"])
     ModelCheckpoint("unused", **instance["checkpoint"])
-    dataset_args = set(inspect.signature(CellDataset.__init__).parameters)
+    dataset_args = set(inspect.signature(InstanceTileFolderDataset.__init__).parameters)
     for split in ("train", "val", "test"):
         assert set(instance["data"][split]) <= dataset_args
 
@@ -327,7 +322,7 @@ def test_prompted_evaluation_scores_perfect_detections_as_pq_one(tmp_path):
     data = _write_pannuke_tile(tmp_path)
     cfg = {"prompts": {1: "a cell", 2: "b cell"}, "num_classes": 3, "thresholds": [0.5, 0.95]}
     cfg["data"] = {"val": data}
-    prompter = _OraclePrompter(CellDataset(**data), {"a cell": {1}, "b cell": {2}})
+    prompter = _OraclePrompter(InstanceTileFolderDataset(**data), {"a cell": {1}, "b cell": {2}})
     metrics = prompted.evaluate(cfg, "val", prompter)
     assert metrics["val/bpq@0.5"] == 1 and metrics["val/mpq@0.5"] == 1
     assert metrics["val/pq_1@0.5"] == 1 and metrics["val/nuclei_per_tile@0.5"] == 3
@@ -335,6 +330,6 @@ def test_prompted_evaluation_scores_perfect_detections_as_pq_one(tmp_path):
     binary = prompted.evaluate(
         {**cfg, "prompts": "a cell"},
         "val",
-        _OraclePrompter(CellDataset(**data), {"a cell": {1, 2}}),
+        _OraclePrompter(InstanceTileFolderDataset(**data), {"a cell": {1, 2}}),
     )
     assert binary["val/bpq@0.5"] == 1 and "val/mpq@0.5" not in binary

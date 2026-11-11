@@ -25,7 +25,7 @@ Sections as in ``pathotrain.pathocls.train`` (``task``, ``trainer``, ``checkpoin
     model: {checkpoint: path, num_classes: 5, head?: {hidden: 100, dropout: 0.0}}
     match_radius?: 15                             # px
     features?: {batch_size: 16, num_workers: 0}   # tiles per batch while embedding
-    data: {train: {...}, val?: {...}}             # CellDataset (images, instances, types, ...)
+    data: {train: {...}, val?: {...}}   # InstanceTileFolderDataset (images, instances, types, ...)
 """
 
 import argparse
@@ -41,7 +41,6 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from pathotrain import experiment
 from pathotrain.cellseg import train as cell_train
-from pathotrain.cellseg.data import CellDataset
 from pathotrain.cellseg.instances import (
     centroids,
     instance_types,
@@ -49,6 +48,7 @@ from pathotrain.cellseg.instances import (
     pair_centroids,
 )
 from pathotrain.cellseg.models import CellViT
+from pathotrain.dataloader import InstanceTileFolderDataset
 from pathotrain.dataloader.augmentation import eval_transform
 from pathotrain.engine import load_config
 from pathotrain.pathocls.model import Head
@@ -109,7 +109,7 @@ def embed_cells(cfg: dict, model: CellViT, postprocess: dict, split: str) -> Ten
     """``(embedding, class)`` of every detected cell of ``data[split]`` paired with a
     ground-truth cell of a known type, on CPU."""
     norm = {"mean": cfg["mean"], "std": cfg["std"]}
-    dataset = CellDataset(transform=eval_transform(**norm), **cfg["data"][split])
+    dataset = InstanceTileFolderDataset(transform=eval_transform(**norm), **cfg["data"][split])
     features = {"batch_size": 16, "num_workers": 0, **cfg.get("features", {})}
     loader = DataLoader(dataset, **features)
     num_types = cfg["model"]["num_classes"] + 1  # with background

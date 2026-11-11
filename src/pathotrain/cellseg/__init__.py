@@ -1,10 +1,8 @@
-from pathotrain.cellseg.data import CellDataset
 from pathotrain.cellseg.models import BRANCHES, CellViT, HoVerNet, build_model, hovernext
 from pathotrain.cellseg.task import CellInstanceTask, PanopticQuality
 
 __all__ = [
     "BRANCHES",
-    "CellDataset",
     "CellInstanceTask",
     "CellViT",
     "HoVerNet",

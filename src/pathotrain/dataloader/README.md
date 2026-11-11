@@ -157,6 +157,40 @@ val = SegmentationDataset(val_slides, val_annotations, transform=eval_transform(
 `HEDJitter`, `HSVJitter`, `Enhance` and `RandomRot90` are torchvision v2 transforms, so
 they also fit in your own `v2.Compose` (wrap inputs as `tv_tensors.Image` / `Mask`).
 
+## Instance segmentation dataloader
+
+`InstanceTileFolderDataset` reads tiles with an instance mask (one id per object, 0
+background) and a type mask (class per pixel, 0 background, 255 ignored). They come from
+three folders paired by file stem, each with an optional prefix that is removed first.
+For PanNuke, `img_X.png`, `inst_X.png` and `sem_X.png` pair as `X`. `cellseg` uses it.
+
+```python
+from pathotrain.cellseg.instances import add_hv_maps
+from pathotrain.dataloader import InstanceTileFolderDataset
+from pathotrain.dataloader.augmentation import train_transform
+
+train = InstanceTileFolderDataset(
+    "pannuke/train/images",
+    "pannuke/train/inst_masks",
+    "pannuke/train/sem_masks",
+    transform=train_transform(),  # default eval_transform(): ImageNet normalisation
+    target_transform=add_hv_maps,  # optional: adds HoVer-Net's "hv" maps
+    image_prefix="img_",
+    instance_prefix="inst_",
+    type_prefix="sem_",
+    contours=True,  # the instance masks are nucleus outlines
+)
+image, target = train[0]  # (3, H, W) float32; {"inst": (H, W) int64, "type": (H, W) int64}
+```
+
+- Both masks go through the same augmentation as the image. Pixels a geometric operation
+  uncovers become 255 in `type` and background in `inst`.
+- `target_transform` runs on the target after augmentation, in the loader workers. Use
+  it for targets that depend on the augmented geometry, such as distance maps.
+- `contours=True` is for conversions that store 1 px object outlines instead of ids.
+  `instances_from_contours` derives the ids: object pixels that are not on an outline
+  split into 4-connected pieces, and outline pixels on an object go to the nearest piece.
+
 ## Detection dataloader
 
 `DetectionDataset` is the detection counterpart of `SegmentationDataset`: the
@@ -176,7 +210,7 @@ kwargs = dict(
     roi_class="roi",
     roi_fill=(255, 255, 255),  # paint outside the ROI instead of skipping tiles that cross it
     min_box_visibility=0.6,  # keep an object cut by the tile edge if 60% of its box shows
-    min_objects=1,           # keep tiles with at least one object (0 adds empty tiles)
+    min_objects=1,  # keep tiles with at least one object (0 adds empty tiles)
     tiling=TilingConfig(tile_size=512, tile_mpp=0.5),
 )
 train = DetectionDataset(slides, annotations, transform=train_transform(boxes=True), **kwargs)
@@ -279,7 +313,9 @@ from pathotrain.dataloader import (
 )
 
 views = MultiCropTransform(global_crops=2, local_crops=8)  # 224 and 98 px views
-train = UnlabelledSlideDataset(["data/slides"], views, tiling=TilingConfig(tile_size=224, tile_mpp=0.5))
+train = UnlabelledSlideDataset(
+    ["data/slides"], views, tiling=TilingConfig(tile_size=224, tile_mpp=0.5)
+)
 # or tiles already on disk: UnlabelledTileFolderDataset(["tiles/train"], views)
 loader = DataLoader(train, batch_size=32, shuffle=True, num_workers=8, collate_fn=multicrop_collate)
 for batch in loader:  # {"global": (2, 32, 3, 224, 224), "local": (8, 32, 3, 98, 98)}
@@ -302,7 +338,7 @@ Labelled tiles, from class folders (`root/<class>/*.png`) or a CSV with `path`
 and `label` columns (paths relative to `root`, default the CSV's folder):
 
 ```python
-train = ClassTileDataset("crc/train")                        # class_names: sorted folders
+train = ClassTileDataset("crc/train")  # class_names: sorted folders
 val = ClassTileDataset(csv="crc/val.csv", class_names=train.class_names)
 image, label = train[0]  # (3, H, W) in [0, 1], index into class_names
 ```

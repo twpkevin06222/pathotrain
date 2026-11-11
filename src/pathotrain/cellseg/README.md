@@ -112,9 +112,10 @@ none from "nucleus", and "neoplastic cell" works far better than "tumor cell".
 - **Semantic** (`segmentation.train`): `images` and `masks` folders, as in
   `segmentation`. `image_prefix` / `mask_prefix` are removed before pairing, so
   PanNuke's `img_X.png` pairs with `sem_X.png`.
-- **Instance and classifier** (`CellDataset`): `images`, `instances` and `types`
-  folders, each with an optional prefix. Instance masks hold one id per nucleus. With
-  `contours: true`, they hold nucleus outlines instead, as in the PanNuke conversion at
-  `pannuke_split`, and the ids are derived: nucleus pixels inside no outline, split into
-  connected pieces, with outline pixels given to the nearest piece. Type masks hold the
-  class per pixel (0 background, 255 ignored).
+- **Instance, classifier and prompted** (`InstanceTileFolderDataset` from
+  `pathotrain.dataloader`): `images`, `instances` and `types` folders, each with an
+  optional prefix. Instance masks hold one id per nucleus. With `contours: true`, they
+  hold nucleus outlines instead, as in the PanNuke conversion at `pannuke_split`, and the
+  ids are derived (see the dataloader README). Type masks hold the class per pixel
+  (0 background, 255 ignored). `cellseg.train` adds HoVer-Net's HV maps to each target
+  with `cellseg.instances.add_hv_maps`, in the loader workers after augmentation.

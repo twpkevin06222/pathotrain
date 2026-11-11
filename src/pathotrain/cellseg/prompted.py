@@ -30,9 +30,9 @@ import torch
 from loguru import logger
 from PIL import Image
 
-from pathotrain.cellseg.data import CellDataset
 from pathotrain.cellseg.instances import instance_types
 from pathotrain.cellseg.task import PanopticQuality
+from pathotrain.dataloader import InstanceTileFolderDataset
 from pathotrain.engine import load_config
 from pathotrain.pathofm.sam3 import SAM3_REPO, SAM3_REVISION
 
@@ -104,7 +104,7 @@ def evaluate(cfg: dict, split: str, prompter: Sam3Prompter | None = None) -> dic
     thresholds = sorted(cfg.get("thresholds", [0.5]))
     num_classes = cfg.get("num_classes", max(by_type) + 1)
     names = cfg.get("class_names") or [str(i) for i in range(num_classes)]
-    dataset = CellDataset(**cfg["data"][split])
+    dataset = InstanceTileFolderDataset(**cfg["data"][split])
     prompter = prompter or Sam3Prompter()
     pq = {t: PanopticQuality(num_classes) for t in thresholds}
     found = dict.fromkeys(thresholds, 0)

@@ -7,6 +7,7 @@ from pathotrain.dataloader.detection import (
     DetectionTileFolderDataset,
     export_detection_tiles,
 )
+from pathotrain.dataloader.instance import InstanceTileFolderDataset, instances_from_contours
 from pathotrain.dataloader.pathogen import PairedTileDataset, paired_transform
 from pathotrain.dataloader.registration import export_registered_tiles
 from pathotrain.dataloader.segmentation import (
@@ -25,6 +26,7 @@ __all__ = [
     "ClassTileDataset",
     "DetectionDataset",
     "DetectionTileFolderDataset",
+    "InstanceTileFolderDataset",
     "MultiCropTransform",
     "PairedTileDataset",
     "SegmentationDataset",
@@ -35,6 +37,7 @@ __all__ = [
     "export_registered_tiles",
     "export_segmentation_tiles",
     "find_pairs",
+    "instances_from_contours",
     "multicrop_collate",
     "paired_transform",
 ]
