@@ -25,8 +25,9 @@ loss:
 task:
   lr: 1.0e-3
   warmup_epochs: 1
-  # class_names: [background, ...]  # in your masks' label order (it differs between
-  #                                  # PanNuke conversions); default 0..5
+  # Label order of the pannuke_split conversion: PanNuke's neoplastic channel (0) is label 5,
+  # the other types keep their channel number. Other conversions may differ; check counts.
+  class_names: [background, inflammatory, connective, necrosis, epithelial, neoplastic]
 
 trainer:
   max_epochs: 50

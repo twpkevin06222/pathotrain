@@ -5,7 +5,8 @@
 
 name: cellseg-prompted
 
-# One prompt per nucleus type (label: prompt), in your masks' label order; or a single
+# One prompt per nucleus type (label: prompt), in your masks' label order (here the
+# pannuke_split conversion's: neoplastic is label 5); or a single
 # prompt, e.g. `prompts: cell`, for untyped nuclei (binary PQ only). On PanNuke, "cell"
 # finds nuclei and "nucleus" almost nothing.
 prompts:
@@ -15,7 +16,7 @@ prompts:
   4: epithelial cell
   5: neoplastic cell
 num_classes: 6              # types plus background
-# class_names: [background, inflammatory, connective, dead, epithelial, neoplastic]
+class_names: [background, inflammatory, connective, necrosis, epithelial, neoplastic]
 
 thresholds: [0.4, 0.5, 0.6] # detection score thresholds, all scored in one pass
 mask_threshold: 0.5
