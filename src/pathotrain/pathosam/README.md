@@ -100,9 +100,13 @@ This writes the model folder that patholamina's sam3 service loads:
   merged in, plus SAM 3's `config.json`, processor and tokenizer files and `LICENSE`.
   `Sam3TrackerModel.from_pretrained(folder)` serves clicks and boxes, and
   `Sam3Model.from_pretrained(folder)` serves text prompts.
-- **`model_card.json`:** task `interactive_segmentation`, `input.mpp` (the training mpp),
-  `input.tile_size` (`--size`), and `prompt_vocabulary`: the text prompts SAM 3 finds nuclei
-  with on H&E (`cell`, `neoplastic cell`; change them with `--prompt`, repeatable).
+- **`model_card.json`:** task `promptable_segmentation`, `input.mpp` (the training mpp),
+  `input.tile_size` (`--size`), `input.image_size` (1008), and `prompt_vocabulary`: the
+  text prompts SAM 3 finds nuclei with on H&E, each `{phrase, synonyms, class_id}`, with
+  one `classes` entry per class id. Set them with `--prompt "phrase=synonym,...:class_id"`,
+  repeatable (default: `cell` with `nucleus`, `nuclei`; `neoplastic cell` with
+  `tumour cell`, `tumor cell`). Ids default to the next unused one; phrases and synonyms
+  must be unique.
 
 Tile folders record no resolution, so `--mpp` is required unless training tiled slides.
 `--register NAME` logs the folder to MLflow (`--mlflow-db`, default the config's) and
