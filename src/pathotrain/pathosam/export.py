@@ -1,10 +1,19 @@
-"""Export SAM 3's point and box model to ONNX as an encoder and a decoder::
+"""Export SAM 3's point and box model as a model folder for serving, or to ONNX::
 
-    python -m pathotrain.pathosam.export out/                     # zero-shot SAM 3
-    python -m pathotrain.pathosam.export out/ --checkpoint best.ckpt --size 256
+    python -m pathotrain.pathosam.export out/ --checkpoint best.ckpt --mpp 0.25 \\
+        --register pathosam                                       # the model folder
+    python -m pathotrain.pathosam.export out/ --mpp 0.25          # zero-shot SAM 3
+    python -m pathotrain.pathosam.export onnx/ --checkpoint best.ckpt --onnx
 
-Needs the export extra (``pip install 'pathotrain[export]'``). As SAM's own ONNX export,
-the heavy image encoder runs once per tile and the light decoder once per click:
+The model folder (:func:`export`), for patholamina's sam3 service: ``model.safetensors``
+(SAM 3 with the fine-tuned tracker merged in) with SAM 3's config and processor files, and
+``model_card.json`` (task ``interactive_segmentation``, ``input.mpp`` the training mpp,
+``prompt_vocabulary``). ``--register NAME`` adds it to the MLflow registry with the card at
+the version's artifact root, as patholamina's ``register_model.py`` expects.
+
+ONNX (:func:`export_onnx`, ``--onnx``) needs the export extra
+(``pip install 'pathotrain[export]'``). As SAM's own ONNX export, the heavy image encoder
+runs once per tile and the light decoder once per click:
 
 - ``encoder.onnx`` (1.9 GB; weights over 2 GB would go to ``encoder.onnx.data`` beside it):
   ``image`` (batch, 3, size, size)
@@ -36,16 +45,24 @@ training data's terms.
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
 import torch
+from loguru import logger
 from torch import Tensor, nn
 
+from patchology import TilingConfig
 from pathotrain import experiment
-from pathotrain.pathofm.sam3 import SAM3_REVISION, cache_rope
+from pathotrain.engine import MLflowLogger
+from pathotrain.engine.logger import sqlite_store
+from pathotrain.pathofm.sam3 import SAM3_REPO, SAM3_REVISION, cache_rope
 from pathotrain.pathosam.model import PAD, InteractiveSam, to_tile
 
+# Text prompts SAM 3 finds nuclei with on H&E (PanNuke presence: "cell" 0.99, "neoplastic
+# cell" 0.85; "nucleus" 0.08 and "tumor cell" 0.36 are left out).
+PROMPT_VOCABULARY = ("cell", "neoplastic cell")
 FPN = ("fpn0", "fpn1", "fpn2")
 DECODER_INPUTS = (*FPN, "points", "labels", "mask_input", "has_mask")
 DECODER_OUTPUTS = ("low_res", "iou", "multi_low_res", "multi_iou")
@@ -106,7 +123,155 @@ def _decoder_inputs(
     return (*fpn, points, labels, mask_input, has_mask)
 
 
+def _load(checkpoint: str | Path | None) -> tuple[InteractiveSam, dict, str]:
+    """The model, its training config (``{}`` zero-shot) and its SAM 3 revision."""
+    if checkpoint is None:
+        return InteractiveSam(), {}, SAM3_REVISION
+    from pathotrain.pathosam.train import load_model
+
+    model, cfg = load_model(checkpoint)
+    return model, cfg, cfg.get("model", {}).get("revision", SAM3_REVISION)
+
+
+def _sam3_snapshot(revision: str) -> Path:
+    """The local ``facebook/sam3`` snapshot (config, processor, tokenizer, weights)."""
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(SAM3_REPO, revision=revision))
+
+
+def merge_tracker(tracker: nn.Module, base: dict[str, Tensor]) -> dict[str, Tensor]:
+    """SAM 3's full state dict ``base`` (detector and tracker) with ``tracker``'s
+    (``Sam3TrackerModel``) weights put in, so text, box and click prompts all load from it.
+
+    Raises:
+        KeyError: a tracker weight has no place in ``base``.
+    """
+    merged = dict(base)
+    for key, value in tracker.state_dict().items():
+        if key.startswith("vision_encoder.backbone."):  # the ViT is the detector's
+            full = f"detector_model.{key}"
+        elif key.startswith("vision_encoder.neck."):
+            full = "tracker_neck." + key.removeprefix("vision_encoder.neck.")
+        else:
+            full = f"tracker_model.{key}"
+        if full not in merged:
+            raise KeyError(f"tracker weight {key} has no {full} in SAM 3's checkpoint")
+        merged[full] = value.detach().to("cpu", merged[full].dtype).contiguous()
+    return merged
+
+
+def training_mpp(cfg: dict, mpp: float | None) -> float:
+    """The resolution the model trained at: the config's when it tiled slides, else ``mpp``.
+
+    Raises:
+        ValueError: ``mpp`` unknown, or it contradicts the training config.
+    """
+    train = cfg.get("data", {}).get("train", {})
+    if "slides" in train:
+        trained = TilingConfig(**train.get("tiling", {})).tile_mpp
+        if mpp is not None and mpp != trained:
+            raise ValueError(f"the model trained at {trained} mpp; got mpp={mpp}")
+        return trained
+    if mpp is None:
+        raise ValueError(
+            "tile folders (and zero-shot SAM 3) record no resolution: pass mpp (--mpp)"
+        )
+    return mpp
+
+
 def export(
+    out_dir: str | Path,
+    checkpoint: str | Path | None = None,
+    mpp: float | None = None,
+    size: int = 256,
+    prompt_vocabulary: list[str] | tuple[str, ...] = PROMPT_VOCABULARY,
+    name: str | None = None,
+    register: str | None = None,
+    mlflow_db: str | Path | None = None,
+) -> Path:
+    """Write the model folder for serving (patholamina's sam3 service) to ``out_dir``:
+
+    - ``model.safetensors``: SAM 3 (``facebook/sam3`` at the checkpoint's revision) with the
+      fine-tuned tracker merged in (:func:`merge_tracker`), with SAM 3's ``config.json``,
+      processor and tokenizer files and ``LICENSE``, so ``Sam3TrackerModel`` (clicks, boxes)
+      and ``Sam3Model`` (text) both load the folder with ``from_pretrained``;
+    - ``model_card.json``: task ``interactive_segmentation``, ``input.mpp`` (the training
+      mpp, :func:`training_mpp`) and ``input.tile_size``, and ``prompt_vocabulary``, the
+      text prompts SAM 3 finds nuclei with on H&E.
+
+    With ``register``, also log the folder to MLflow and register it as a new version of
+    that model, with the card at the version's artifact root, as patholamina's
+    ``register_model.py`` does. Returns ``out_dir``."""
+    from safetensors.torch import load_file, save_file
+
+    model, cfg, revision = _load(checkpoint)
+    mpp = training_mpp(cfg, mpp)
+    if not prompt_vocabulary:
+        raise ValueError("prompt_vocabulary is empty")
+    snapshot = _sam3_snapshot(revision)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for file in snapshot.iterdir():
+        if file.name != "model.safetensors":
+            shutil.copyfile(file, out / file.name)
+    merged = merge_tracker(model.sam, load_file(snapshot / "model.safetensors"))
+    save_file(merged, out / "model.safetensors", metadata={"format": "pt"})
+    run_id = experiment.checkpoint_run_id(checkpoint) if checkpoint else None
+    card = {
+        "schema_version": 1,
+        "name": name or register or cfg.get("name", "sam3"),
+        "version": "1",
+        "task": "interactive_segmentation",
+        "framework": "transformers",
+        "file": "model.safetensors",
+        "precision": "fp32",
+        "input": {
+            "tile_size": size,
+            "mpp": mpp,
+            "channel_order": "RGB",
+            "normalisation": {"mean": [0.5] * 3, "std": [0.5] * 3, "scale": 1 / 255},
+        },
+        "prompt_vocabulary": list(prompt_vocabulary),
+        "classes": [],
+        "provenance": {
+            "training_run_id": run_id,
+            "base_model": f"{SAM3_REPO}@{revision}",
+            "checkpoint": str(Path(checkpoint).resolve()) if checkpoint else None,
+        },
+        "licence": "SAM License (facebook/sam3); a fine-tuned checkpoint adds its data's terms",
+    }
+    (out / experiment.CARD_FILE).write_text(json.dumps(card, indent=2) + "\n")
+    if register is not None:
+        _register(out, register, cfg, mlflow_db)
+    return out
+
+
+def _register(folder: Path, name: str, cfg: dict, mlflow_db: str | Path | None) -> str:
+    """Log ``folder`` as the ``model`` artifacts of an ``export`` run and register them as a
+    new version of ``name``; returns the version. The store is ``mlflow_db`` (default the
+    config's), else ``MLFLOW_TRACKING_URI``."""
+    from mlflow import MlflowClient
+
+    mlflow_db = mlflow_db or cfg.get("mlflow_db")
+    run = MLflowLogger(
+        cfg.get("name", "pathosam"), "export", **(sqlite_store(mlflow_db) if mlflow_db else {})
+    )
+    run.log_hyperparams({"folder": str(folder.resolve())})  # starts the run
+    run_id = run.run_id
+    client = MlflowClient()  # the tracking URI the run set
+    client.log_artifacts(run_id, str(folder), artifact_path="model")
+    if not client.search_registered_models(filter_string=f"name = '{name}'"):
+        client.create_registered_model(name)
+    # Plain run artifacts, not a logged MLflow model: MLflow 3 registers them this way.
+    uri = f"{client.get_run(run_id).info.artifact_uri}/model"
+    version = client.create_model_version(name, uri, run_id=run_id).version
+    run.finalize("success")
+    logger.info(f"registered {folder} as {name} version {version}")
+    return str(version)
+
+
+def export_onnx(
     out_dir: str | Path,
     checkpoint: str | Path | None = None,
     size: int = 256,
@@ -125,13 +290,7 @@ def export(
         raise ImportError(
             "ONNX export needs the export extra: pip install 'pathotrain[export]'"
         ) from e
-    if checkpoint is not None:
-        from pathotrain.pathosam.train import load_model
-
-        model, cfg = load_model(checkpoint)
-        revision = cfg.get("model", {}).get("revision", SAM3_REVISION)
-    else:
-        model, revision = InteractiveSam(), SAM3_REVISION
+    model, _, revision = _load(checkpoint)
     model = model.eval().float()
     cache_rope(model.sam.vision_encoder.backbone)  # SAM 3's own RoPE does not export
     out = Path(out_dir)
@@ -245,13 +404,43 @@ class OnnxTracker:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("out_dir", help="folder for encoder.onnx, decoder.onnx and pathosam.json")
+    parser.add_argument("out_dir", help="the model folder to write")
     parser.add_argument(
         "--checkpoint", help="a pathosam.train checkpoint (default: zero-shot SAM 3)"
     )
     parser.add_argument("--size", type=int, default=256, help="tile side in px (default: 256)")
+    parser.add_argument(
+        "--mpp", type=float, help="training resolution; required unless it tiled slides"
+    )
+    parser.add_argument(
+        "--prompt",
+        action="append",
+        dest="prompts",
+        help=f"a text prompt for the card's prompt_vocabulary, repeatable "
+        f"(default: {', '.join(PROMPT_VOCABULARY)})",
+    )
+    parser.add_argument("--name", help="the card's model name (default: --register, else run)")
+    parser.add_argument("--register", help="also register the folder in MLflow under this name")
+    parser.add_argument(
+        "--mlflow-db", help="MLflow SQLite file for --register (default: the config's mlflow_db)"
+    )
+    parser.add_argument(
+        "--onnx", action="store_true", help="write encoder.onnx and decoder.onnx instead"
+    )
     args = parser.parse_args(argv)
-    export(args.out_dir, args.checkpoint, args.size)
+    if args.onnx:
+        export_onnx(args.out_dir, args.checkpoint, args.size)
+        return
+    export(
+        args.out_dir,
+        args.checkpoint,
+        args.mpp,
+        args.size,
+        args.prompts or PROMPT_VOCABULARY,
+        args.name,
+        args.register,
+        args.mlflow_db,
+    )
 
 
 if __name__ == "__main__":
