@@ -288,12 +288,30 @@ def test_model_folder_merges_the_tracker_into_sam3_and_registers_with_its_card(
     for key, value in trained.items():
         assert torch.equal(merged[full(key)], value), key
     card = json.loads((out / "model_card.json").read_text())
-    assert card["task"] == "interactive_segmentation" and card["file"] == "model.safetensors"
-    assert card["input"]["mpp"] == 0.25 and card["prompt_vocabulary"] == ["cell"]
+    assert card["task"] == "promptable_segmentation" and card["file"] == "model.safetensors"
+    assert card["input"]["mpp"] == 0.25 and card["input"]["image_size"] == 1008
+    assert card["prompt_vocabulary"] == [{"phrase": "cell", "synonyms": [], "class_id": 0}]
+    assert card["classes"] == [{"id": 0, "name": "cell"}]
 
     client = MlflowClient(sqlite_store(db)["tracking_uri"])
     uri = client.get_model_version_download_uri("sam", "1")
     assert json.loads(load_text(f"{uri}/model_card.json")) == card
+
+
+def test_vocabulary_parses_synonyms_and_classes():
+    from pathotrain.pathosam import export as pathosam_export
+
+    assert pathosam_export.vocabulary(
+        ["cell=nucleus, nuclei", "neoplastic cell:3", "tumour cell=tumor cell"]
+    ) == [
+        {"phrase": "cell", "synonyms": ["nucleus", "nuclei"], "class_id": 0},
+        {"phrase": "neoplastic cell", "synonyms": [], "class_id": 3},
+        {"phrase": "tumour cell", "synonyms": ["tumor cell"], "class_id": 1},
+    ]
+    with pytest.raises(ValueError, match="unique"):
+        pathosam_export.vocabulary(["cell=Nucleus", "nucleus"])
+    with pytest.raises(ValueError, match="phrase"):
+        pathosam_export.vocabulary(["=x"])
 
 
 def test_example_config_is_valid():

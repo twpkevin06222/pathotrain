@@ -7,8 +7,8 @@
 
 The model folder (:func:`export`), for patholamina's sam3 service: ``model.safetensors``
 (SAM 3 with the fine-tuned tracker merged in) with SAM 3's config and processor files, and
-``model_card.json`` (task ``interactive_segmentation``, ``input.mpp`` the training mpp,
-``prompt_vocabulary``). ``--register NAME`` adds it to the MLflow registry with the card at
+``model_card.json`` (task ``promptable_segmentation``, ``input.mpp`` the training mpp,
+``prompt_vocabulary``: ``[{phrase, synonyms, class_id}]``, one class per ``class_id``). ``--register NAME`` adds it to the MLflow registry with the card at
 the version's artifact root, as patholamina's ``register_model.py`` expects.
 
 ONNX (:func:`export_onnx`, ``--onnx``) needs the export extra
@@ -44,9 +44,11 @@ training data's terms.
 """
 
 import argparse
+import itertools
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -62,7 +64,10 @@ from pathotrain.pathosam.model import PAD, InteractiveSam, to_tile
 
 # Text prompts SAM 3 finds nuclei with on H&E (PanNuke presence: "cell" 0.99, "neoplastic
 # cell" 0.85; "nucleus" 0.08 and "tumor cell" 0.36 are left out).
-PROMPT_VOCABULARY = ("cell", "neoplastic cell")
+PROMPT_VOCABULARY = ("cell=nucleus,nuclei", "neoplastic cell=tumour cell,tumor cell")
+"""Default ``--prompt`` values: ``phrase[=synonym,...][:class_id]``."""
+IMAGE_SIZE = 1008
+"""SAM 3 resizes every tile to this side inside the model."""
 FPN = ("fpn0", "fpn1", "fpn2")
 DECODER_INPUTS = (*FPN, "points", "labels", "mask_input", "has_mask")
 DECODER_OUTPUTS = ("low_res", "iou", "multi_low_res", "multi_iou")
@@ -134,10 +139,12 @@ def _load(checkpoint: str | Path | None) -> tuple[InteractiveSam, dict, str]:
 
 
 def _sam3_snapshot(revision: str) -> Path:
-    """The local ``facebook/sam3`` snapshot (config, processor, tokenizer, weights)."""
+    """The local ``facebook/sam3`` snapshot (config, processor, tokenizer, weights).
+    Not ``sam3.pt``: Meta's original 3.5 GB checkpoint, which transformers never reads (it
+    was downloaded, then copied into every exported folder)."""
     from huggingface_hub import snapshot_download
 
-    return Path(snapshot_download(SAM3_REPO, revision=revision))
+    return Path(snapshot_download(SAM3_REPO, revision=revision, ignore_patterns=["*.pt"]))
 
 
 def merge_tracker(tracker: nn.Module, base: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -180,6 +187,32 @@ def training_mpp(cfg: dict, mpp: float | None) -> float:
     return mpp
 
 
+def vocabulary(prompts: list[str] | tuple[str, ...]) -> list[dict[str, Any]]:
+    """``phrase[=synonym,...][:class_id]`` prompts → the card's ``prompt_vocabulary``. A
+    prompt without ``:class_id`` gets the next unused id; phrases and synonyms must be unique
+    (case-insensitive), as the sam3 service maps any of them back to one entry."""
+    entries: list[dict[str, Any]] = []
+    for prompt in prompts:
+        text, _, class_id = prompt.partition(":")
+        phrase, _, synonyms = text.partition("=")
+        used = {e["class_id"] for e in entries}
+        entries.append(
+            {
+                "phrase": phrase.strip(),
+                "synonyms": [s.strip() for s in synonyms.split(",") if s.strip()],
+                "class_id": int(class_id)
+                if class_id.strip()
+                else next(i for i in itertools.count() if i not in used),
+            }
+        )
+    words = [w.lower() for e in entries for w in (e["phrase"], *e["synonyms"])]
+    if not entries or not all(e["phrase"] for e in entries):
+        raise ValueError("every prompt needs a phrase")
+    if len(words) != len(set(words)):
+        raise ValueError(f"phrases and synonyms must be unique: {words}")
+    return entries
+
+
 def export(
     out_dir: str | Path,
     checkpoint: str | Path | None = None,
@@ -196,9 +229,10 @@ def export(
       fine-tuned tracker merged in (:func:`merge_tracker`), with SAM 3's ``config.json``,
       processor and tokenizer files and ``LICENSE``, so ``Sam3TrackerModel`` (clicks, boxes)
       and ``Sam3Model`` (text) both load the folder with ``from_pretrained``;
-    - ``model_card.json``: task ``interactive_segmentation``, ``input.mpp`` (the training
-      mpp, :func:`training_mpp`) and ``input.tile_size``, and ``prompt_vocabulary``, the
-      text prompts SAM 3 finds nuclei with on H&E.
+    - ``model_card.json``: task ``promptable_segmentation``, ``input.mpp`` (the training
+      mpp, :func:`training_mpp`), ``input.tile_size`` and ``input.image_size``, and
+      ``prompt_vocabulary`` (:func:`vocabulary`), the text prompts SAM 3 finds nuclei with on
+      H&E, each with synonyms and the class it suggests (``classes``).
 
     With ``register``, also log the folder to MLflow and register it as a new version of
     that model, with the card at the version's artifact root, as patholamina's
@@ -207,8 +241,7 @@ def export(
 
     model, cfg, revision = _load(checkpoint)
     mpp = training_mpp(cfg, mpp)
-    if not prompt_vocabulary:
-        raise ValueError("prompt_vocabulary is empty")
+    entries = vocabulary(prompt_vocabulary)
     snapshot = _sam3_snapshot(revision)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -222,18 +255,23 @@ def export(
         "schema_version": 1,
         "name": name or register or cfg.get("name", "sam3"),
         "version": "1",
-        "task": "interactive_segmentation",
+        "task": "promptable_segmentation",
         "framework": "transformers",
         "file": "model.safetensors",
         "precision": "fp32",
         "input": {
             "tile_size": size,
+            "image_size": IMAGE_SIZE,
             "mpp": mpp,
             "channel_order": "RGB",
             "normalisation": {"mean": [0.5] * 3, "std": [0.5] * 3, "scale": 1 / 255},
         },
-        "prompt_vocabulary": list(prompt_vocabulary),
-        "classes": [],
+        "prompt_vocabulary": entries,
+        # One class per class_id, named after the first phrase that suggests it.
+        "classes": [
+            {"id": cid, "name": next(e["phrase"] for e in entries if e["class_id"] == cid)}
+            for cid in sorted({e["class_id"] for e in entries})
+        ],
         "provenance": {
             "training_run_id": run_id,
             "base_model": f"{SAM3_REPO}@{revision}",
@@ -416,8 +454,9 @@ def main(argv: list[str] | None = None) -> None:
         "--prompt",
         action="append",
         dest="prompts",
-        help=f"a text prompt for the card's prompt_vocabulary, repeatable "
-        f"(default: {', '.join(PROMPT_VOCABULARY)})",
+        help="a text prompt for the card's prompt_vocabulary, repeatable: "
+        "phrase[=synonym,...][:class_id] "
+        f"(default: {' '.join(repr(p) for p in PROMPT_VOCABULARY)})",
     )
     parser.add_argument("--name", help="the card's model name (default: --register, else run)")
     parser.add_argument("--register", help="also register the folder in MLflow under this name")
