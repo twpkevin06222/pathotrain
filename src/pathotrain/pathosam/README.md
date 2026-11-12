@@ -87,15 +87,36 @@ its 32 GB.
 Anything distributed that is built on SAM 3, such as a fine-tuned checkpoint, falls under
 the SAM License. A model trained on PanNuke is also non-commercial.
 
+## Export for serving
+
+```bash
+python -m pathotrain.pathosam.export model/ --checkpoint runs/pathosam-interactive/checkpoints/best.ckpt \
+    --mpp 0.25 --register pathosam
+```
+
+This writes the model folder that patholamina's sam3 service loads:
+
+- **`model.safetensors`:** all of SAM 3 (detector and tracker) with the fine-tuned tracker
+  merged in, plus SAM 3's `config.json`, processor and tokenizer files and `LICENSE`.
+  `Sam3TrackerModel.from_pretrained(folder)` serves clicks and boxes, and
+  `Sam3Model.from_pretrained(folder)` serves text prompts.
+- **`model_card.json`:** task `interactive_segmentation`, `input.mpp` (the training mpp),
+  `input.tile_size` (`--size`), and `prompt_vocabulary`: the text prompts SAM 3 finds nuclei
+  with on H&E (`cell`, `neoplastic cell`; change them with `--prompt`, repeatable).
+
+Tile folders record no resolution, so `--mpp` is required unless training tiled slides.
+`--register NAME` logs the folder to MLflow (`--mlflow-db`, default the config's) and
+registers it as a new version of NAME, with the card at the version's artifact root. Without
+`--checkpoint`, the export is zero-shot SAM 3.
+
 ## ONNX export
 
 ```bash
-python -m pathotrain.pathosam.export out/ --checkpoint runs/pathosam-interactive/checkpoints/best.ckpt
+python -m pathotrain.pathosam.export out/ --checkpoint runs/pathosam-interactive/checkpoints/best.ckpt --onnx
 python -m pathotrain.pathosam.eval zeroshot.yaml --split test --only tracker --onnx out/
 ```
 
-Without `--checkpoint`, the export is zero-shot SAM 3. As with SAM's own ONNX export, the
-model is split in two:
+As with SAM's own ONNX export, the model is split in two:
 
 - **`encoder.onnx` (1.9 GB):** runs once per tile. It takes the normalised tile
   (mean = std = 0.5) at `--size` px and returns three feature maps, `fpn0`, `fpn1` and

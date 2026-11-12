@@ -215,11 +215,11 @@ def test_onnx_export_runs_a_click_session_like_pytorch(monkeypatch, tmp_path):
     import json
 
     from pathotrain.pathosam.eval import Tracker, track_tile
-    from pathotrain.pathosam.export import OnnxTracker, export
+    from pathotrain.pathosam.export import OnnxTracker, export_onnx
 
     model = _tiny_sam(monkeypatch)
     monkeypatch.setattr("pathotrain.pathosam.export.InteractiveSam", lambda: model)
-    out = export(tmp_path / "onnx", size=64)
+    out = export_onnx(tmp_path / "onnx", size=64)
     meta = json.loads((out / "pathosam.json").read_text())
     assert meta["tile_size"] == 64 and meta["labels"]["box"] == [2, 3]
     assert {p.name for p in out.iterdir()} >= {"encoder.onnx", "decoder.onnx", "pathosam.json"}
@@ -234,6 +234,66 @@ def test_onnx_export_runs_a_click_session_like_pytorch(monkeypatch, tmp_path):
     for j in (0.0, 0.1):
         np.testing.assert_allclose(box_o[j], box_t[j], atol=0.02)
     np.testing.assert_allclose(curve_o, curve_t, atol=0.02)  # IoU after each click
+
+
+def test_model_folder_merges_the_tracker_into_sam3_and_registers_with_its_card(
+    monkeypatch, tmp_path
+):
+    import json
+
+    from mlflow import MlflowClient
+    from mlflow.artifacts import load_text
+    from safetensors.torch import load_file, save_file
+
+    from pathotrain.engine.logger import sqlite_store
+    from pathotrain.pathosam import export as pathosam_export
+
+    model = _tiny_sam(monkeypatch)
+    monkeypatch.setattr(pathosam_export, "InteractiveSam", lambda: model)
+    trained = {k: v.clone() for k, v in model.sam.state_dict().items()}
+    # A fake facebook/sam3 snapshot: the full checkpoint's key layout, other weights.
+    names = {
+        "vision_encoder.backbone.": "detector_model.vision_encoder.backbone.",
+        "vision_encoder.neck.": "tracker_neck.",
+    }
+
+    def full(key):
+        for prefix, to in names.items():
+            if key.startswith(prefix):
+                return to + key.removeprefix(prefix)
+        return f"tracker_model.{key}"
+
+    snapshot = tmp_path / "sam3"
+    snapshot.mkdir()
+    base = {full(k): torch.zeros_like(v) for k, v in trained.items()}
+    base["detector_model.text_encoder.w"] = torch.ones(2)
+    save_file(base, snapshot / "model.safetensors")
+    (snapshot / "config.json").write_text("{}")
+    monkeypatch.setattr(pathosam_export, "_sam3_snapshot", lambda revision: snapshot)
+
+    with pytest.raises(ValueError, match="mpp"):
+        pathosam_export.export(tmp_path / "out")
+    db = tmp_path / "mlflow.db"
+    out = pathosam_export.export(
+        tmp_path / "out", mpp=0.25, prompt_vocabulary=["cell"], register="sam", mlflow_db=db
+    )
+    assert {p.name for p in out.iterdir()} == {
+        "model.safetensors",
+        "config.json",
+        "model_card.json",
+    }
+    merged = load_file(out / "model.safetensors")
+    assert merged.keys() == base.keys()
+    assert torch.equal(merged["detector_model.text_encoder.w"], torch.ones(2))
+    for key, value in trained.items():
+        assert torch.equal(merged[full(key)], value), key
+    card = json.loads((out / "model_card.json").read_text())
+    assert card["task"] == "interactive_segmentation" and card["file"] == "model.safetensors"
+    assert card["input"]["mpp"] == 0.25 and card["prompt_vocabulary"] == ["cell"]
+
+    client = MlflowClient(sqlite_store(db)["tracking_uri"])
+    uri = client.get_model_version_download_uri("sam", "1")
+    assert json.loads(load_text(f"{uri}/model_card.json")) == card
 
 
 def test_example_config_is_valid():
