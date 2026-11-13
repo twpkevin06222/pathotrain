@@ -112,6 +112,35 @@ def test_train_from_config_and_rebuild_model_from_checkpoint(tmp_path, monkeypat
     train(longer, resume=tmp_path / "run/checkpoints/last.ckpt")
 
 
+def test_init_weights_fine_tunes_from_a_checkpoint(tmp_path, monkeypatch, toy_data):
+    monkeypatch.chdir(tmp_path)
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")
+    train(_cfg(tmp_path / "first"))
+    best = tmp_path / "first/checkpoints/best.ckpt"
+    loaded = {}
+    build = train_module.segmentation.build_model
+
+    def spy(**kwargs):
+        loaded["model"] = build(**kwargs)
+        return loaded["model"]
+
+    monkeypatch.setattr(train_module.segmentation, "build_model", spy)
+    load = train_module.load_weights
+    monkeypatch.setattr(
+        train_module,
+        "load_weights",
+        lambda model, path: (load(model, path), loaded.setdefault("weights", path)),
+    )
+    # A fresh run (epoch 1 of its own) starting from the first run's weights.
+    cfg = {**_cfg(tmp_path / "second"), "init_weights": str(best)}
+    train(cfg)
+    assert loaded["weights"] == str(best)
+    assert "epoch 1/2" in (tmp_path / "second/train.log").read_text()
+    with pytest.raises(ValueError, match="no model weights"):
+        torch.save({"other": 1}, tmp_path / "bad.ckpt")
+        train_module.load_weights(loaded["model"], tmp_path / "bad.ckpt")
+
+
 def test_evaluate_reproduces_the_last_validation(tmp_path, monkeypatch, toy_data):
     monkeypatch.chdir(tmp_path)
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path}/mlflow.db")

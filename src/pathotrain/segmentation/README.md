@@ -217,6 +217,9 @@ paired by file stem. Tiles of different sizes need `augmentation.crop`.
 - The config is copied to `output_dir/config.yaml`, uploaded to the MLflow run,
   logged as flat params (`loss.gamma`, ...) and stored in both checkpoints. A
   different config for an existing `output_dir` is refused unless `--resume`.
+- `init_weights: best.ckpt` starts a new run from a checkpoint's weights (fine-tuning on
+  new data); the `model` section must build the same architecture. Unlike `--resume`, the
+  optimizer, schedule and epoch count start afresh.
 - On resume, `max_epochs` may grow: the learning-rate schedule is rebuilt for
   the new length.
 - `load_model("runs/exp01/checkpoints/best.ckpt")` returns the model and its config.

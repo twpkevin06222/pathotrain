@@ -14,6 +14,8 @@ Sections (``?`` marks optional ones)::
     mean: IMAGENET_MEAN         # or MIDNIGHT_MEAN, or 3 numbers in [0, 1]
     std: IMAGENET_STD
     model: {...}                # build_model(**model)
+    init_weights?: best.ckpt    # start from a checkpoint's weights (fine-tuning): one
+                                # written by train for the same model section
     loss?: {name: FocalDiceLoss, ...}  # a loss class from pathotrain.segmentation
     task?: {...}                # SegmentationTask (lr, warmup_epochs, class_names, ...)
     trainer?: {...}             # TrainerConfig
@@ -96,6 +98,8 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
     experiment.check_foreground_crop(cfg)
     config_path = experiment.start(cfg, resume)
     model = segmentation.build_model(**cfg["model"])
+    if cfg.get("init_weights") and resume is None:
+        load_weights(model, cfg["init_weights"])
     augmentation = cfg.get("augmentation", {})
     task = segmentation.SegmentationTask(
         model, cfg["model"]["num_classes"], loss=build_loss(cfg), **task_kwargs(cfg)
@@ -109,6 +113,16 @@ def train(cfg: dict, resume: str | Path | None = None) -> dict[str, float]:
         area = getattr(train_set, "image_area", None)  # tile folders only
         sampler = build_sampler(cfg, train_set.class_fraction[:, 1:], area)
     return experiment.fit(cfg, task, train_set, val_set, config_path, resume, train_sampler=sampler)
+
+
+def load_weights(model: nn.Module, path: str | Path) -> None:
+    """Load the weights of a ``best.ckpt`` / ``last.ckpt`` written by :func:`train` into
+    ``model``, built from the same ``model`` section (fine-tuning, unlike ``--resume``:
+    the optimizer, schedule and epoch count start afresh)."""
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if "model" not in state:
+        raise ValueError(f"{path} has no model weights; it was not written by pathotrain's train")
+    model.load_state_dict(state["model"])
 
 
 def load_model(path: str | Path, map_location: str = "cpu") -> tuple[nn.Module, dict]:

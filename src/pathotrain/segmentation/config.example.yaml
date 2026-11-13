@@ -21,6 +21,11 @@ model:
   # encoder_kwargs: {freeze: true}  # midnight-12k / sam3 only: false fine-tunes the backbone;
   #   {adaptation: {type: lora, rank: 8}} fine-tunes it with LoRA (needs peft)
 
+# Optional: start from the weights of a checkpoint written by train (fine-tuning; the
+# model section must build the same architecture). Unlike --resume, the optimizer,
+# schedule and epochs start afresh.
+# init_weights: runs/exp00/checkpoints/best.ckpt
+
 # Optional; default CEDiceLoss. CEDiceLoss, FocalLoss or FocalDiceLoss, other keys go to it.
 loss:
   name: CEDiceLoss
